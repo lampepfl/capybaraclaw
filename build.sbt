@@ -20,7 +20,20 @@ val stableScala3Version = "3.8.2"
 val tacitVersion = "0.1.4-SNAPSHOT"
 val tacitLibraryVersion = "0.1.0-SNAPSHOT"
 
-addCommandAlias("claw", "set capybaraclaw / run / baseDirectory := file(\"capybaraclaw/examples/default\"); capybaraclaw/run")
+lazy val clawCommand = Command.args("claw", "[<path>]") { (state, args) =>
+  val rawPath = args match {
+    case Seq()  => "."
+    case Seq(p) => p
+    case _      => sys.error(s"claw takes at most one path argument, got ${args.size}")
+  }
+  val absPath = new java.io.File(rawPath).getCanonicalPath
+  val escaped = absPath.replace("\\", "\\\\").replace("\"", "\\\"")
+  List(
+    s"""set capybaraclaw / run / baseDirectory := file("$escaped")""",
+    "capybaraclaw/run",
+  ) ::: state
+}
+
 addCommandAlias("slackbot", "capybaraclaw/runMain capybaraclaw.slackTestMain")
 
 val MUnitFramework = new TestFramework("munit.Framework")
@@ -97,4 +110,5 @@ lazy val root = (project in file("."))
   .settings(
     name := "capybaraclaw-root",
     publish / skip := true,
+    commands += clawCommand,
   )
