@@ -3,7 +3,8 @@ package capybaraclaw
 import tacit.core.{Context, Config}
 import tacit.executor.ReplSession
 import tacit.agents.llm.endpoint.*
-import tacit.agents.llm.agentic.{Agent, AgentState, AgentError}
+import tacit.agents.llm.agentic.{Agent, AgentRun, AgentState, AgentError}
+import gears.async.Async
 import tacit.agents.llm.utils.IsToolArg
 import tacit.agents.utils.Result
 import io.circe.Json
@@ -12,7 +13,11 @@ import io.circe.syntax.*
 case class EvalScalaArgs(code: String) derives IsToolArg
 
 /** Agent class for Claw. */
-class ClawAgent(val workDir: String):
+class ClawAgent(
+  val workDir: String,
+  initialMessages: List[Message] = Nil,
+  endpointOverride: Option[Endpoint] = None,
+):
   val clawConfig: ClawConfig = ClawConfig.load(workDir)
   val agentConfig: AgentConfig = AgentConfig.fromClawConfig(clawConfig, workDir)
 
@@ -26,12 +31,12 @@ class ClawAgent(val workDir: String):
     recorder = None,
   )
 
-  private given Endpoint = clawConfig.provider match
+  private given Endpoint = endpointOverride.getOrElse(clawConfig.provider match
     case "anthropic"  => AnthropicEndpoint.createFromEnv()
     case "openai"     => OpenAIEndpoint.createFromEnv()
     case "openrouter" => OpenRouterEndpoint.createFromEnv()
     case "ollama"     => OllamaEndpoint.createFromEnv()
-    case other        => throw RuntimeException(s"Unknown provider: $other")
+    case other        => throw RuntimeException(s"Unknown provider: $other"))
 
   private val repl: ReplSession = ReplSession.create
 
@@ -52,6 +57,10 @@ class ClawAgent(val workDir: String):
         result.error.foreach(e => msg.append(s"Error:\n$e\n"))
         msg.toString
 
+    // Seed with any persisted prior transcript so rehydrated conversations continue
+    // where they left off.
+    a.state.messages = initialMessages
+
     a
 
   def ask(
@@ -59,6 +68,9 @@ class ClawAgent(val workDir: String):
     onToolCall: Option[(String, String, String) => Unit] = None,
   ): Result[ChatResponse, AgentError] =
     agent.ask(message, onToolCall)
+
+  def streamAsk(message: String)(using Async.Spawn): AgentRun =
+    agent.streamAsk(message)
 
   def printStartupInfo(): Unit =
     val clawJsonExists = java.io.File(workDir, "claw.json").exists()

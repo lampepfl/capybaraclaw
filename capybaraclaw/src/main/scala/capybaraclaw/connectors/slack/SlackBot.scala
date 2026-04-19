@@ -6,8 +6,8 @@ import gears.async.ReadableChannel
 class SlackBot(botToken: String, appToken: String):
   val client: SlackClient = SlackClient(botToken, appToken)
 
-  def sendMessage(channel: String, text: String): String =
-    client.sendMessage(channel, text)
+  def sendMessage(channel: String, text: String, threadTs: Option[String] = None): String =
+    client.sendMessage(channel, text, threadTs)
 
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     client.readHistory(channel, limit)

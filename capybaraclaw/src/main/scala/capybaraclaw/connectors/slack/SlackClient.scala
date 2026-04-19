@@ -95,20 +95,20 @@ class SlackClient(botToken: String, appToken: String):
   /** Post a message to a channel. Returns the last message timestamp.
     * Uses Slack's markdown block for proper Markdown rendering.
     * Splits into multiple messages if text exceeds the 12k char limit.
+    * When `threadTs` is provided, the message is posted as a reply in that thread.
     */
-  def sendMessage(channel: String, text: String): String =
+  def sendMessage(channel: String, text: String, threadTs: Option[String] = None): String =
     val chunks = splitMessage(text)
     var lastTs = ""
     for chunk <- chunks do
-      val response = methods.chatPostMessage(
-        ChatPostMessageRequest.builder()
-          .channel(channel)
-          .blocks(java.util.List.of(
-            com.slack.api.model.block.Blocks.markdown(m => m.text(chunk))
-          ))
-          .text(chunk) // fallback for notifications
-          .build()
-      )
+      val builder = ChatPostMessageRequest.builder()
+        .channel(channel)
+        .blocks(java.util.List.of(
+          com.slack.api.model.block.Blocks.markdown(m => m.text(chunk))
+        ))
+        .text(chunk) // fallback for notifications
+      threadTs.foreach(ts => builder.threadTs(ts))
+      val response = methods.chatPostMessage(builder.build())
       if !response.isOk then
         throw RuntimeException(s"Slack API error: ${response.getError}")
       lastTs = response.getTs.nn

@@ -1,95 +1,43 @@
 package capybaraclaw
 
-import tacit.agents.llm.endpoint.*
-import tacit.agents.llm.agentic.*
-
 import capybaraclaw.connectors.slack.SlackBot
+import capybaraclaw.gateway.{Gateway, JsonlContextProvider, SlackPort, CliPort}
 import gears.async.Async
 import gears.async.default.given
 import language.experimental.captureChecking
 
-/** Entrypoint of Capybara Claw */
+/** Entrypoint of Capybara Claw.
+  *
+  * Boots a Gateway with two Ports (Slack + CLI) and one JSONL-backed ContextProvider
+  * rooted at the working directory. The Gateway lazily spawns a `ClawAgent` per
+  * (port, thread) on first message, rehydrating prior conversation from disk.
+  */
 @main def main(): Unit =
   val workDirFile = java.io.File(".").getCanonicalFile
-  val canonicalWorkDir = workDirFile.getPath
+  val workDir = workDirFile.getPath
 
-  val claw = ClawAgent(canonicalWorkDir)
-  claw.printStartupInfo()
+  printStartupInfo(workDir)
+
+  val contextProvider = JsonlContextProvider(workDirFile)
 
   Async.blocking:
     SlackBot.usingBot: bot =>
-      println("Listening on Slack. Press Ctrl+C to stop.")
+      val slack = SlackPort(bot)
+      val cli = CliPort()
 
-      var running = true
-      while running do
-        bot.messageChannel.read() match
-          case Right(msg) =>
-            val user = bot.getUser(msg.userId)
-            val channel = bot.getChannel(msg.origin.channelId)
-            println(s"[#${channel.name}] ${user.displayName}: ${msg.text}")
+      val gateway = Gateway(workDir, List(slack, cli), contextProvider)
 
-            val toolCalls = scala.collection.mutable.ListBuffer[(String, String, String)]()
+      slack.start()
+      cli.start()
 
-            val onToolCall: (String, String, String) -> Unit = (name, input, result) =>
-              println(s" >>> [Tool Call] $name")
-              println(input)
-              println(s" <<< output:\n$result")
-              println(" <<< end")
-              toolCalls += ((name, input, result))
+      println("Gateway ready. Ports: slack, cli. Ctrl+C to stop.")
+      gateway.run()
 
-            claw.ask(msg.text, onToolCall = Some(onToolCall)) match
-              case Right(response) =>
-                val thinking = response.message.thinking
-                if thinking.nonEmpty then
-                  println(s"<thinking>\n$thinking\n</thinking>\n")
-                println(response.message.text)
-
-                val slackMessage = composeSlackMessage(thinking, toolCalls.toList, response)
-                bot.sendMessage(msg.origin.channelId, slackMessage)
-              case Left(err) =>
-                println(s"Error: $err")
-                bot.sendMessage(msg.origin.channelId, s"**Error:** $err")
-
-          case Left(err) =>
-            println(s"Error: $err")
-            running = false
-
-private def composeSlackMessage(
-  thinking: String,
-  toolCalls: List[(String, String, String)],
-  response: ChatResponse,
-): String =
-  val sb = StringBuilder()
-
-  // Thinking
-  if thinking.nonEmpty then
-    sb.append("#### Thinking\n")
-    sb.append("> ")
-    sb.append(thinking.linesIterator.mkString("\n> "))
-    sb.append("\n\n")
-
-  // Tool calls
-  for (name, input, result) <- toolCalls do
-    val code = try
-      ujson.read(input)("code").str
-    catch
-      case _: Exception => input
-    sb.append(s"#### $name\n")
-    sb.append(s"```scala\n$code\n```\n")
-    if result.trim.nonEmpty then
-      sb.append(s"> **Output**\n")
-      sb.append("> ```\n")
-      result.linesIterator.foreach: line =>
-        sb.append(s"> $line\n")
-      sb.append("> ```\n")
-    sb.append("\n")
-
-  if toolCalls.nonEmpty then sb.append("---\n\n")
-
-  // Response
-  sb.append(response.message.text)
-
-  if response.finishReason == FinishReason.MaxTokens then
-    sb.append("\n\n*[max tokens exceeded — response truncated]*")
-
-  sb.toString
+private def printStartupInfo(workDir: String): Unit =
+  val clawJsonExists = java.io.File(workDir, "claw.json").exists()
+  val clawMdExists = java.io.File(workDir, "CLAW.md").exists()
+  println("Capybara Claw Gateway")
+  println(s"  workdir  : $workDir")
+  println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
+  println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
+  println()
