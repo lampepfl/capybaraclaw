@@ -35,6 +35,7 @@ lazy val clawCommand = Command.args("claw", "[<path>]") { (state, args) =>
 }
 
 addCommandAlias("slackbot", "capybaraclaw/runMain capybaraclaw.slackTestMain")
+addCommandAlias("simple-agent", "agents/runMain tacit.agents.simpleAgentRepl")
 
 val MUnitFramework = new TestFramework("munit.Framework")
 val TestFull = config("testFull").extend(Test)
