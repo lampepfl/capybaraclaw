@@ -40,14 +40,16 @@ abstract class Agent:
   type State <: AgentState
 
   val state: State = getInitState
-  var tools: List[AgentTool[State]] = Nil
+
+  private var _tools: List[AgentTool[State]] = Nil
+  def tools: List[AgentTool[State]] = _tools
 
   def getInitState: State
 
   def addTool(tool: AgentTool[State]): this.type =
-    if tools.exists(_.name == tool.name) then
+    if _tools.exists(_.name == tool.name) then
       throw IllegalArgumentException(s"Tool with name '${tool.name}' already exists")
-    tools = tools :+ tool
+    _tools = _tools :+ tool
     this
 
   def addTools(newTools: AgentTool[State]*): this.type =

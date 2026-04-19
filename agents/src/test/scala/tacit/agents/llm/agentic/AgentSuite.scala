@@ -77,7 +77,7 @@ def makeAgent(tools: List[AgentTool[AgentState]] = Nil): Agent =
   val agent = new Agent:
     type State = SimpleState
     def getInitState = SimpleState(defaultConfig)
-  agent.tools = tools
+  if tools.nonEmpty then agent.addTools(tools*)
   agent
 
 def readAll[T](ch: ReadableChannel[T])(using Async): List[T] =
