@@ -62,7 +62,7 @@ case class CountdownArgs(from: Int) derives IsToolArg
     else
       Async.blocking:
         var inThinking = false
-        val ch = agent.streamAsk(line)
+        val ch = agent.streamAsk(line).events
         var reading = true
         while reading do
           ch.read() match

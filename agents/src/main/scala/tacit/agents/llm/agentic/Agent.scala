@@ -8,7 +8,8 @@ import tacit.agents.utils.Result.ok
 import llm.utils.{IsToolArg, ToolArgParsingError}
 import scala.util.boundary
 import scala.annotation.tailrec
-import gears.async.{Async, Future, BufferedChannel, ReadableChannel, Channel}
+import java.util.concurrent.atomic.AtomicBoolean
+import gears.async.{Async, Future, SyncChannel, ReadableChannel, UnboundedChannel, Channel, ChannelClosedException}
 
 class AgentError(val description: String):
   override def toString: String = s"AgentError: $description"
@@ -17,6 +18,28 @@ enum AgentStreamEvent:
   case Stream(event: StreamEvent)
   case ToolResult(id: String, toolName: String, result: String)
   case MaxTokensExceeded
+  case Steered(texts: List[String])
+  case Unconsumed(texts: List[String])
+
+enum SteerOutcome:
+  case Accepted
+  case RejectedRunEnded
+
+class AgentRun private[agentic] (
+  val events: ReadableChannel[Result[AgentStreamEvent, AgentError]],
+  private val steering: UnboundedChannel[String],
+  private val completed: AtomicBoolean,
+):
+  def steer(text: String): SteerOutcome =
+    if completed.get then SteerOutcome.RejectedRunEnded
+    else
+      try
+        steering.sendImmediately(text)
+        SteerOutcome.Accepted
+      catch case _: ChannelClosedException =>
+        SteerOutcome.RejectedRunEnded
+
+  def isActive: Boolean = !completed.get
 
 trait AgentState:
   val llmConfig: LLMConfig
@@ -105,15 +128,40 @@ abstract class Agent:
 
       case _ => response
 
-  def streamAsk(message: String)(using endpoint: Endpoint, spawn: Async.Spawn): ReadableChannel[Result[AgentStreamEvent, AgentError]] =
+  def streamAsk(message: String)(using endpoint: Endpoint, spawn: Async.Spawn): AgentRun =
     state.messages = state.messages :+ Message.user(message)
     val config = state.llmConfig.copy(tools = tools.map(_.toolSchema))
-    val ch = BufferedChannel[Result[AgentStreamEvent, AgentError]](16)
+    val ch = SyncChannel[Result[AgentStreamEvent, AgentError]]()
+    val steering = UnboundedChannel[String]()
+    val completed = new AtomicBoolean(false)
     Future:
-      streamLoop(config, ch)(using endpoint)
-    ch.asReadable
+      try streamLoop(config, ch, steering)(using endpoint)
+      finally
+        // Reject any further steer() before capturing leftovers, so a late
+        // send cannot land silently between the final drain and the close.
+        completed.set(true)
+        val leftover = drainSteering(steering)
+        if leftover.nonEmpty then
+          try ch.send(Right(AgentStreamEvent.Unconsumed(leftover)))
+          catch case _: Throwable => ()
+        try steering.close() catch case _: Throwable => ()
+        try ch.close() catch case _: Throwable => ()
+    AgentRun(ch.asReadable, steering, completed)
 
-  private def streamLoop(config: LLMConfig, ch: BufferedChannel[Result[AgentStreamEvent, AgentError]])(using endpoint: Endpoint, spawn: Async.Spawn): Unit =
+  private def drainSteering(queue: UnboundedChannel[String]): List[String] =
+    val buf = scala.collection.mutable.ListBuffer[String]()
+    var more = true
+    while more do
+      queue.readSource.poll() match
+        case Some(Right(t)) => buf += t
+        case _              => more = false
+    buf.toList
+
+  private def streamLoop(
+    config: LLMConfig,
+    ch: SyncChannel[Result[AgentStreamEvent, AgentError]],
+    steering: UnboundedChannel[String],
+  )(using endpoint: Endpoint, spawn: Async.Spawn): Unit =
     try
       val streamCh = endpoint.stream(state.messages, config)
       val response = consumeStream(streamCh, ch)
@@ -126,35 +174,39 @@ abstract class Agent:
             case tu: Content.ToolUse => tu
 
           val dispatched = toolUses.map(tu => (tu, dispatchTool(tu)))
-          val failed = dispatched.collectFirst { case (tu, Left(err)) => err }
+          val failed = dispatched.collectFirst { case (_, Left(err)) => err }
 
           failed match
             case Some(err) =>
               ch.send(Left(err))
-              ch.close()
             case None =>
               for case (tu, Right(msg)) <- dispatched do
                 val resultContent = msg.content.collectFirst:
                   case Content.ToolResult(_, content, _) => content
                 ch.send(Right(AgentStreamEvent.ToolResult(tu.id, tu.name, resultContent.getOrElse(""))))
                 state.messages = state.messages :+ msg
-              streamLoop(config, ch)
+
+              val steered = drainSteering(steering)
+              if steered.nonEmpty then
+                state.messages = state.messages ++ steered.map(Message.user)
+                ch.send(Right(AgentStreamEvent.Steered(steered)))
+
+              streamLoop(config, ch, steering)
 
         case FinishReason.MaxTokens =>
           redactMaxTokensMessage(response)
           ch.send(Right(AgentStreamEvent.MaxTokensExceeded))
-          ch.close()
 
         case _ =>
-          ch.close()
+          ()
     catch
       case e: Exception =>
-        ch.send(Left(AgentError(s"Stream error: ${e.getMessage}")))
-        ch.close()
+        try ch.send(Left(AgentError(s"Stream error: ${e.getMessage}")))
+        catch case _: Throwable => ()
 
   private def consumeStream(
     streamCh: ReadableChannel[Result[StreamEvent, LLMError]],
-    outCh: BufferedChannel[Result[AgentStreamEvent, AgentError]]
+    outCh: SyncChannel[Result[AgentStreamEvent, AgentError]]
   )(using Async): ChatResponse =
     var finalResponse: ChatResponse | Null = null
     var reading = true
@@ -169,13 +221,11 @@ abstract class Agent:
             case _ =>
         case Right(Left(llmError)) =>
           outCh.send(Left(AgentError(llmError.description)))
-          outCh.close()
           throw RuntimeException(s"LLM error: ${llmError.description}")
         case Left(_) => // channel closed
           reading = false
     if finalResponse == null then
       outCh.send(Left(AgentError("Stream ended without Done event")))
-      outCh.close()
       throw RuntimeException("Stream ended without Done event")
     finalResponse
 
