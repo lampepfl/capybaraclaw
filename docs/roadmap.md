@@ -6,12 +6,12 @@
 
 Currently supported interfaces:
 - Slack
-- TUI
+- CLI
 
 #### More Connectors
 
 Support more messenger connectors in the gateway. Candidates:
-- Whatsapp
+- WhatsApp
 - Matrix
 - Telegram
 - Email
@@ -22,14 +22,14 @@ Support more messenger connectors in the gateway. Candidates:
 
 #### Improve the TUI Chat
 
-The TUI chat right now is quite rudimentary. We want to make it full fledged with:
+The TUI chat right now is quite rudimentary. We want to make it full-fledged with:
 - Nice TUI rendering
 - Session management
 - More slash commands
 
 #### Context Management
 
-Now, we have only a jsonl-file-based simple context persistence. Things to consider:
+Currently, we have only a simple JSONL-file-based context persistence. Things to consider:
 - Efficient persistence solutions (databases).
 - Auto-compaction when context reaches LLM's limit.
 - Auto-memory (dreaming). Organise and summarise message histories into memories periodically.
@@ -69,9 +69,9 @@ trait ReplyStream:
 
 #### Real World Tools
 
-Add more tools into TACIT.
+Add more tools to TACIT.
 - Email management.
-- Office works.
+- Office work.
 - Web search.
 - Browser/computer control.
 
@@ -85,7 +85,7 @@ Extend TACIT with tools for reading memories and loading skills.
 
 ### Harness Safety
 
-We want to support finer-grained permission system. An agent of a different channel when handling a message from a different user should get different capabilities.
+We want a finer-grained permission system. Each agent should be granted capabilities scoped to its origin (port, thread, user).
 
 ### User Experience
 
@@ -99,13 +99,13 @@ We want a smooth user experience for:
 
 Expand the scope of testing, and tighten the testing framework.
 
-Right now, the test suite consist of two parts:
+Right now, the test suite consists of two parts:
 (1) Simple functionality tests without network access.
-(2) Tests that actually talks to API endpoint to test behaviours like function calling, streaming, etc.
+(2) Tests that actually talk to live API endpoints to exercise behaviours like function calling, streaming, etc.
 
-The second part needs API keys in environment variables to run, and it takes a long time.
+The second part needs API keys in environment variables to run, and takes a long time.
 
 #### Packaging
 
-Currently, this project depends a locally-published tacit. We have to standardize the publishing pipeline.
+Currently, this project depends on a locally-published tacit. We have to standardize the publishing pipeline.
 
