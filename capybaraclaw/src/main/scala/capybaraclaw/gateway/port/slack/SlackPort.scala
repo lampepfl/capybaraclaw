@@ -1,7 +1,7 @@
-package capybaraclaw.gateway.port
+package capybaraclaw.gateway.port.slack
 
-import capybaraclaw.connectors.slack.{SlackBot, Message as SlackMessage}
 import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
+import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 
 /** Gateway Port backed by Slack Socket Mode.
@@ -41,7 +41,7 @@ class SlackPort(bot: SlackBot) extends Port:
     try outCh.close() catch case _: Throwable => ()
     try bot.shutdown() catch case _: Throwable => ()
 
-  private def toOrigin(msg: SlackMessage): Origin =
+  private def toOrigin(msg: Message): Origin =
     val thread = msg.threadTs match
       case Some(ts) => s"${msg.origin.channelId}/$ts"
       case None     => msg.origin.channelId

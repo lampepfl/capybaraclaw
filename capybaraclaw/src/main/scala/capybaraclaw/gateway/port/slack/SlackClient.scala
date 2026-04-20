@@ -1,4 +1,4 @@
-package capybaraclaw.connectors.slack
+package capybaraclaw.gateway.port.slack
 
 import com.slack.api.Slack
 import com.slack.api.methods.MethodsClient

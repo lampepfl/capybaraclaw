@@ -1,4 +1,4 @@
-package capybaraclaw.connectors.slack
+package capybaraclaw.gateway.port.slack
 
 import gears.async.Async
 import gears.async.default.given

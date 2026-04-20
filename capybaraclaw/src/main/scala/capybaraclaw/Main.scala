@@ -1,8 +1,8 @@
 package capybaraclaw
 
-import capybaraclaw.connectors.slack.SlackBot
 import capybaraclaw.gateway.{Gateway, JsonlContextProvider}
-import capybaraclaw.gateway.port.{SlackPort, CliPort}
+import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
+import capybaraclaw.gateway.port.cli.CliPort
 import gears.async.Async
 import gears.async.default.given
 import language.experimental.captureChecking

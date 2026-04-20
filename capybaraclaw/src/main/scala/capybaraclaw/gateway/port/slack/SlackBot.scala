@@ -1,4 +1,4 @@
-package capybaraclaw.connectors.slack
+package capybaraclaw.gateway.port.slack
 import language.experimental.captureChecking
 
 import gears.async.ReadableChannel
@@ -30,4 +30,3 @@ object SlackBot:
     val bot = fromEnv()
     try block(bot)
     finally bot.shutdown()
-
