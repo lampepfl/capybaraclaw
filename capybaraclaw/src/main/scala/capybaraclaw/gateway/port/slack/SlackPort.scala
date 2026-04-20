@@ -29,12 +29,15 @@ class SlackPort(bot: SlackBot) extends Port:
     while running do
       bot.messageChannel.read() match
         case Right(slackMsg) =>
-          outCh.sendImmediately(GatewayMessage(toOrigin(slackMsg), slackMsg.text))
+          val origin = toOrigin(slackMsg)
+          logIn(origin, slackMsg.text)
+          outCh.sendImmediately(GatewayMessage(origin, slackMsg.text))
         case Left(_) =>
           running = false
 
   def send(key: ContextKey, text: String): Unit =
     val (channelId, threadTs) = decodeThread(key.thread)
+    logOut(key, text)
     bot.sendMessage(channelId, text, threadTs)
 
   def shutdown(): Unit =
@@ -51,6 +54,17 @@ class SlackPort(bot: SlackBot) extends Port:
     thread.indexOf('/') match
       case -1 => (thread, None)
       case i  => (thread.substring(0, i), Some(thread.substring(i + 1)))
+
+  private def logIn(origin: Origin, text: String): Unit =
+    println(s"[slack <-] (${origin.thread}) ${origin.user}: ${snippet(text)}")
+
+  private def logOut(key: ContextKey, text: String): Unit =
+    println(s"[slack ->] (${key.thread}) ${snippet(text)}")
+
+  private def snippet(text: String, max: Int = 200): String =
+    val oneLine = text.replace('\n', ' ').replace('\r', ' ')
+    if oneLine.length <= max then oneLine
+    else oneLine.substring(0, max) + "…"
 
 object SlackPort:
   val Id: String = "slack"
