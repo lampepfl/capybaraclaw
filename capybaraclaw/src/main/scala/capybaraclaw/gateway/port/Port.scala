@@ -1,5 +1,6 @@
-package capybaraclaw.gateway
+package capybaraclaw.gateway.port
 
+import capybaraclaw.gateway.{ContextKey, GatewayMessage}
 import gears.async.ReadableChannel
 
 /** A message source/sink through which the Gateway talks to the outside world.

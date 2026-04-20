@@ -1,6 +1,7 @@
-package capybaraclaw.gateway
+package capybaraclaw.gateway.port
 
 import capybaraclaw.connectors.slack.{SlackBot, Message as SlackMessage}
+import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 
 /** Gateway Port backed by Slack Socket Mode.

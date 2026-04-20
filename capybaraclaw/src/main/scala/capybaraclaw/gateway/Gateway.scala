@@ -1,13 +1,14 @@
 package capybaraclaw.gateway
 
 import capybaraclaw.agent.ClawAgent
+import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future}
 import scala.collection.mutable
 
-/** Fine-grained sender identity of a single inbound message. */
+/** Sender identity of an inbound message. */
 case class Origin(port: String, thread: String, user: String)
 
-/** Key under which an agent instance (and its transcript) is shared. All users in the
+/** Key under which an agent instance (and its context) is shared. All users in the
   * same (port, thread) converse with the same `ClawAgent` / REPL / history.
   */
 case class ContextKey(port: String, thread: String)

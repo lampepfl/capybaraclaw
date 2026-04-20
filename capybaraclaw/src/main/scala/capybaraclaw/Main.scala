@@ -1,16 +1,16 @@
 package capybaraclaw
 
 import capybaraclaw.connectors.slack.SlackBot
-import capybaraclaw.gateway.{Gateway, JsonlContextProvider, SlackPort, CliPort}
+import capybaraclaw.gateway.{Gateway, JsonlContextProvider}
+import capybaraclaw.gateway.port.{SlackPort, CliPort}
 import gears.async.Async
 import gears.async.default.given
 import language.experimental.captureChecking
 
 /** Entrypoint of Capybara Claw.
   *
-  * Boots a Gateway with two Ports (Slack + CLI) and one JSONL-backed ContextProvider
-  * rooted at the working directory. The Gateway lazily spawns a `ClawAgent` per
-  * (port, thread) on first message, rehydrating prior conversation from disk.
+  * It boots a Gateway with two Ports (Slack + CLI) and one JSONL-backed ContextProvider
+  * rooted at the working directory.
   */
 @main def main(): Unit =
   val workDirFile = java.io.File(".").getCanonicalFile

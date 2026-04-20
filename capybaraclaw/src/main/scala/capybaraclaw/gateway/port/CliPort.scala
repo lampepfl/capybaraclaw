@@ -1,5 +1,6 @@
-package capybaraclaw.gateway
+package capybaraclaw.gateway.port
 
+import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 
 /** Simple stdin/stdout Port. Useful for local testing without Slack. One thread
