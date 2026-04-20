@@ -6,11 +6,11 @@ Yichen Xu, 20 Apr 2026
 
 It is an always-running LLM agent that offers both power and safety, by leveraging [TACIT](https://github.com/lampepfl/tacit).
 
-TACIT is an agent harness. What makes TACIT different from tranditional harnesses is that it requires LLMs to express their intentions in capability-safe Scala code. It is a known issue that the behaviour of LLMs is difficult to reason about. TACIT provides a clever solution: LLMs must express their intentions in a formal language (which is Scala). Then, all the type level analysis mechanics that have been there for decades come to help reasoning about the **safety** of LLM actions. Apparently unsafe LLM actions (like leaking private information to the public) should be rejected at the type level. 
+TACIT is an agent harness. What makes TACIT different from traditional harnesses is that it requires LLMs to express their intentions in capability-safe Scala code. It is a known issue that the behaviour of LLMs is difficult to reason about. TACIT provides a clever solution: LLMs must express their intentions in a formal language (which is Scala). Then, all the type level analysis mechanics that have been there for decades come to help reasoning about the **safety** of LLM actions. Apparently unsafe LLM actions (like leaking private information to the public) should be rejected at the type level. 
 
 Among all the typing mechanisms, capture checking, a recent Scala 3 experimental feature, is of greatest significance. It provides a capability framework, and tracks capabilities in types. The entire TACIT is built on top of these notions.
 
-So, CapybaraClaw is an always running LLM agent connected to TACIT as its harness for provably-safe behaviours. It also provides a wide variety of communication channels, like CLI, Slack, WhatsApp, etc.
+So, CapybaraClaw is an always-running LLM agent connected to TACIT as its harness for provably-safe behaviours. It also provides a wide variety of communication channels, like CLI, Slack, WhatsApp, etc.
 
 Goals of CapybaraClaw:
 - Safety: It provably prevents a well-defined set of unsafe behaviours. There should be concrete examples of what it can prevent.
@@ -23,8 +23,8 @@ Goals of CapybaraClaw:
 
 - TACIT. The agent harness. It provides the API using which the agent interacts with the computer.
 - Agent. The LLM agent connected to TACIT.
-- Message gateway. A aggregate of all message channels.
-- Context manager. It manages the context fed into the agent. Session management, memory, skills, etc all fit in here.
+- Message gateway. An aggregate of all message channels.
+- Context manager. It manages the context fed into the agent. Session management, memory, skills, etc., all fit in here.
 
 ### Layers
 
@@ -44,9 +44,9 @@ trait Endpoint:
 
 Path: `agents/src/main/scala/tacit/agents/llm/agentic/` (package `tacit.agents.llm.agentic`).
 
-The agentic loop on top of the API Layer. It:
+The agentic loop on top of the Completion API. It:
 - installs tools,
-- and runs the tool calling loop until an output.
+- runs the tool calling loop until an output.
 
 ```scala
 abstract class Agent:
@@ -68,14 +68,14 @@ class AgentRun:
   def isActive: Boolean
 ```
 
-`steer` enqueues a user message that lands at the next post-tool-result boundary. The event channel streams live completion events (message delta, tool call, etc).
+`steer` enqueues a user message that lands at the next post-tool-result boundary. The event channel streams live completion events (message delta, tool call, etc.).
 
 #### ClawAgent
 
 Path: `capybaraclaw/src/main/scala/capybaraclaw/agent/` (package `capybaraclaw.agent`).
 
 `Agent` + TACIT backend. It:
-- loads `AgentConfig` from `claw.json` and configures endpoint, thinking, system prompts, etc.
+- loads `AgentConfig` from `claw.json` and configures endpoint, thinking mode, and system prompt,
 - owns a TACIT `ReplSession` and exposes it to the LLM as an `evaluate_scala` tool,
 - seeds prior history via `initialMessages`.
 
