@@ -20,17 +20,21 @@ val stableScala3Version = "3.8.2"
 val tacitVersion = "0.1.4-SNAPSHOT"
 val tacitLibraryVersion = "0.1.0-SNAPSHOT"
 
-lazy val clawCommand = Command.args("claw", "[<path>]") { (state, args) =>
-  val rawPath = args match {
+lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
+  val (flags, positional) = args.partition(_.startsWith("--"))
+  val rawPath = positional match {
     case Seq()  => "."
     case Seq(p) => p
-    case _      => sys.error(s"claw takes at most one path argument, got ${args.size}")
+    case _      => sys.error(s"claw takes at most one path argument, got: ${positional.mkString(", ")}")
   }
   val absPath = new java.io.File(rawPath).getCanonicalPath
   val escaped = absPath.replace("\\", "\\\\").replace("\"", "\\\"")
+  val runCommand =
+    if (flags.isEmpty) "capybaraclaw/run"
+    else s"capybaraclaw/run ${flags.mkString(" ")}"
   List(
     s"""set capybaraclaw / run / baseDirectory := file("$escaped")""",
-    "capybaraclaw/run",
+    runCommand,
   ) ::: state
 }
 

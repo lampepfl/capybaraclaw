@@ -6,8 +6,8 @@ import tacit.agents.llm.endpoint.{EffortLevel, LLMConfig, ThinkingMode}
   */
 case class AgentConfig(
   workDir: String,
-  provider: String = "anthropic",
-  model: String = "claude-sonnet-4-6",
+  provider: String = "openrouter",
+  model: String = "minimax/minimax-m2.7",
   maxTokens: Int = 16000,
   thinking: Option[ThinkingMode] = None,
   classifiedPaths: List[String] = Nil,
@@ -29,11 +29,11 @@ object AgentConfig:
     val obj =
       if file.exists() then ujson.read(scala.io.Source.fromFile(file).mkString).obj
       else ujson.Obj().value
-    val provider = obj.get("provider").map(_.str).getOrElse("anthropic")
+    val provider = obj.get("provider").map(_.str).getOrElse("openrouter")
     AgentConfig(
       workDir = workDir,
       provider = provider,
-      model = obj.get("model").map(_.str).getOrElse("claude-sonnet-4-6"),
+      model = obj.get("model").map(_.str).getOrElse("minimax/minimax-m2.7"),
       maxTokens = obj.get("max_tokens").map(_.num.toInt).getOrElse(16000),
       thinking = deriveThinking(provider),
       classifiedPaths = obj.get("classified_paths").map(_.arr.map(_.str).toList).getOrElse(Nil),
