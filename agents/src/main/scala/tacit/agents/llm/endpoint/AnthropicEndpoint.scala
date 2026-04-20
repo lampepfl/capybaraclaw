@@ -11,7 +11,7 @@ import com.anthropic.models.messages.{
 }
 import com.anthropic.core.JsonValue
 import scala.jdk.CollectionConverters.*
-import gears.async.{Async, Future, BufferedChannel, ReadableChannel}
+import gears.async.{Async, Future, UnboundedChannel, ReadableChannel}
 import tacit.agents.utils.Result
 
 /** Anthropic API endpoint. */
@@ -122,7 +122,7 @@ class AnthropicEndpoint(config: EndpointConfig) extends Endpoint:
         Left(LLMError(s"Anthropic API error: ${e.getMessage}"))
 
   override def stream(messages: List[Message], llmConfig: LLMConfig)(using Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
-    val ch = BufferedChannel[Result[StreamEvent, LLMError]](16)
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
     Future:
       try
         val params = buildParams(messages, llmConfig).build()
@@ -195,13 +195,9 @@ class AnthropicEndpoint(config: EndpointConfig) extends Endpoint:
           usage = lastUsage,
         )
         ch.send(Right(StreamEvent.Done(response)))
-        ch.close()
       catch
         case e: Exception =>
           ch.send(Left(LLMError(s"Anthropic API error: ${e.getMessage}")))
-          // Do not close the channel here — BufferedChannel.close() discards
-          // buffered messages, so the consumer would see Left(Closed) instead
-          // of the LLMError we just sent.
     ch.asReadable
 
   private def convertResponse(response: AnthropicMessage): ChatResponse =

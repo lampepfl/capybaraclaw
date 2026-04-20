@@ -13,7 +13,7 @@ import com.openai.models.responses.{
 import com.openai.models.{Reasoning, ReasoningEffort, ResponsesModel}
 import com.openai.core.JsonValue
 import scala.jdk.CollectionConverters.*
-import gears.async.{Async, Future, BufferedChannel, ReadableChannel}
+import gears.async.{Async, Future, UnboundedChannel, ReadableChannel}
 import tacit.agents.utils.Result
 
 /** OpenAI endpoint using the Responses API (`/v1/responses`).
@@ -123,7 +123,7 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
         Left(LLMError(s"OpenAI API error: ${e.getMessage}"))
 
   override def stream(messages: List[Message], llmConfig: LLMConfig)(using Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
-    val ch = BufferedChannel[Result[StreamEvent, LLMError]](16)
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
     Future:
       try
         val streamResponse = client.responses().createStreaming(buildParams(messages, llmConfig).build())
@@ -193,7 +193,6 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
               usage = None,
             )
         ch.send(Right(StreamEvent.Done(response)))
-        ch.close()
       catch
         case e: Exception =>
           ch.send(Left(LLMError(s"OpenAI API error: ${e.getMessage}")))

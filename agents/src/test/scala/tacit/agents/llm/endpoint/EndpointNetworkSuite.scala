@@ -4,6 +4,7 @@ package llm.endpoint
 import gears.async.Async
 import gears.async.default.given
 import gears.async.Channel
+import tacit.agents.utils.Result
 
 class EndpointNetworkSuite extends munit.FunSuite:
 
@@ -17,14 +18,26 @@ class EndpointNetworkSuite extends munit.FunSuite:
       conn.getResponseCode == 200
     catch case _: Exception => false
 
-  /** Read all items from a channel until it is closed. */
-  private def readAll[T](ch: gears.async.ReadableChannel[T])(using Async): List[T] =
-    val buf = scala.collection.mutable.ListBuffer[T]()
+  /** Drain a stream channel until the producer signals termination. Endpoint streams
+    * use `Done` (happy path) or `Left(LLMError)` (error path) as the terminator —
+    * producers no longer close the channel (see `AnthropicEndpoint.stream` etc.),
+    * so reading past the terminator would block forever.
+    */
+  private def readAll(
+    ch: gears.async.ReadableChannel[Result[StreamEvent, LLMError]]
+  )(using Async): List[Result[StreamEvent, LLMError]] =
+    val buf = scala.collection.mutable.ListBuffer[Result[StreamEvent, LLMError]]()
     var reading = true
     while reading do
       ch.read() match
-        case Right(item) => buf += item
-        case Left(_)     => reading = false
+        case Right(item) =>
+          buf += item
+          item match
+            case Right(StreamEvent.Done(_)) => reading = false
+            case Left(_)                    => reading = false
+            case _                          =>
+        case Left(_) =>
+          reading = false
     buf.toList
 
   test("OpenAICompletionEndpoint.createFromEnv reads OPENAI_API_KEY".tag(Network)):
