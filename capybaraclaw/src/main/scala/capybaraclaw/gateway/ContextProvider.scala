@@ -16,8 +16,8 @@ trait ContextProvider:
 
 /** JSONL-on-disk `ContextProvider`.
   *
-  * Layout: `{baseDir}/context/{port}/{sanitize(thread)}.jsonl`. Each line is a JSON
-  * object: `{"role": "user|assistant", "text": "..."}`.
+  * Layout: `{baseDir}/.claw/history/{port}/{sanitize(thread)}.jsonl`. Each line is a
+  * JSON object: `{"role": "user|assistant", "text": "..."}`.
   *
   * v1 limitation: only `Role.User` / `Role.Assistant` messages with pure `Content.Text`
   * are persisted. Tool-use and tool-result content is mid-turn scaffolding and is NOT
@@ -48,7 +48,8 @@ class JsonlContextProvider(baseDir: File) extends ContextProvider:
         finally bw.close()
 
   private def fileFor(key: ContextKey): File =
-    File(File(baseDir, "context"), s"${key.port}/${sanitize(key.thread)}.jsonl")
+    val historyRoot = File(File(baseDir, ".claw"), "history")
+    File(historyRoot, s"${key.port}/${sanitize(key.thread)}.jsonl")
 
   private def sanitize(s: String): String =
     // Slack thread ids look like "C0123456/1234567890.123456"; preserve readability
