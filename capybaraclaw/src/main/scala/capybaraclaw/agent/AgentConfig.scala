@@ -1,57 +1,48 @@
-package capybaraclaw
+package capybaraclaw.agent
 
 import tacit.agents.llm.endpoint.{EffortLevel, LLMConfig, ThinkingMode}
 
-/** Configuration loaded from claw.json in the working directory. */
-case class ClawConfig(
+/** Configuration for a Claw agent instance.
+  */
+case class AgentConfig(
+  workDir: String,
   provider: String = "anthropic",
   model: String = "claude-sonnet-4-6",
   maxTokens: Int = 16000,
-  classifiedPaths: List[String] = Nil,
-)
-
-object ClawConfig:
-  def load(workDir: String): ClawConfig =
-    val file = java.io.File(workDir, "claw.json")
-    if !file.exists() then return ClawConfig()
-    val json = ujson.read(scala.io.Source.fromFile(file).mkString)
-    val obj = json.obj
-    ClawConfig(
-      provider = obj.get("provider").map(_.str).getOrElse("anthropic"),
-      model = obj.get("model").map(_.str).getOrElse("claude-sonnet-4-6"),
-      maxTokens = obj.get("max_tokens").map(_.num.toInt).getOrElse(16000),
-      classifiedPaths = obj.get("classified_paths").map(_.arr.map(_.str).toList).getOrElse(Nil),
-    )
-
-/** Internal LLM configuration derived from ClawConfig. */
-case class AgentConfig(
-  model: String,
-  maxTokens: Option[Int],
-  thinking: Option[ThinkingMode],
-  workDir: String,
+  thinking: Option[ThinkingMode] = None,
   classifiedPaths: List[String] = Nil,
 ):
   def toLLMConfig: LLMConfig =
     LLMConfig(
       model = model,
       systemPrompt = Some(AgentConfig.buildSystemPrompt(this)),
-      maxTokens = maxTokens,
+      maxTokens = Some(maxTokens),
       thinking = thinking,
     )
 
 object AgentConfig:
-  def fromClawConfig(cc: ClawConfig, workDir: String): AgentConfig =
-    val thinking: Option[ThinkingMode] = cc.provider match
-      case "anthropic" => Some(ThinkingMode.Budget(2048))
-      case "openai" | "openrouter" | "ollama" => Some(ThinkingMode.Effort(EffortLevel.Medium))
-      case _           => None
+  /** Load `${workDir}/claw.json` if present; otherwise use defaults. The `thinking`
+    * mode is derived from the provider unless explicitly set in the JSON.
+    */
+  def load(workDir: String): AgentConfig =
+    val file = java.io.File(workDir, "claw.json")
+    val obj =
+      if file.exists() then ujson.read(scala.io.Source.fromFile(file).mkString).obj
+      else ujson.Obj().value
+    val provider = obj.get("provider").map(_.str).getOrElse("anthropic")
     AgentConfig(
-      model = cc.model,
-      maxTokens = Some(cc.maxTokens),
-      thinking = thinking,
       workDir = workDir,
-      classifiedPaths = cc.classifiedPaths,
+      provider = provider,
+      model = obj.get("model").map(_.str).getOrElse("claude-sonnet-4-6"),
+      maxTokens = obj.get("max_tokens").map(_.num.toInt).getOrElse(16000),
+      thinking = deriveThinking(provider),
+      classifiedPaths = obj.get("classified_paths").map(_.arr.map(_.str).toList).getOrElse(Nil),
     )
+
+  private def deriveThinking(provider: String): Option[ThinkingMode] = provider match
+    case "anthropic"                        => Some(ThinkingMode.Budget(2048))
+    case "openai" | "openrouter" | "ollama" => Some(ThinkingMode.Effort(EffortLevel.Medium))
+    case _                                  => None
 
   private def loadInterfaceSource(): String =
     val stream = classOf[AgentConfig].getClassLoader.getResourceAsStream("Interface.scala")
@@ -62,8 +53,7 @@ object AgentConfig:
 
   private def loadClawMd(workDir: String): Option[String] =
     val file = java.io.File(workDir, "CLAW.md")
-    if file.exists() then
-      Some(scala.io.Source.fromFile(file).mkString)
+    if file.exists() then Some(scala.io.Source.fromFile(file).mkString)
     else None
 
   private def buildSystemPrompt(config: AgentConfig): String =

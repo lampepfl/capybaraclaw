@@ -1,4 +1,4 @@
-package capybaraclaw
+package capybaraclaw.agent
 
 import tacit.core.{Context, Config}
 import tacit.executor.ReplSession
@@ -18,20 +18,19 @@ class ClawAgent(
   initialMessages: List[Message] = Nil,
   endpointOverride: Option[Endpoint] = None,
 ):
-  val clawConfig: ClawConfig = ClawConfig.load(workDir)
-  val agentConfig: AgentConfig = AgentConfig.fromClawConfig(clawConfig, workDir)
+  val agentConfig: AgentConfig = AgentConfig.load(workDir)
 
   private given Context = Context(
     Config(
       restrictedWorkingDir = Some(workDir),
       libraryConfig = Json.obj(
-        "classifiedPaths" -> clawConfig.classifiedPaths.map(p => java.io.File(workDir, p).getCanonicalPath).asJson
+        "classifiedPaths" -> agentConfig.classifiedPaths.map(p => java.io.File(workDir, p).getCanonicalPath).asJson
       ),
     ),
     recorder = None,
   )
 
-  private given Endpoint = endpointOverride.getOrElse(clawConfig.provider match
+  private given Endpoint = endpointOverride.getOrElse(agentConfig.provider match
     case "anthropic"  => AnthropicEndpoint.createFromEnv()
     case "openai"     => OpenAIEndpoint.createFromEnv()
     case "openrouter" => OpenRouterEndpoint.createFromEnv()
@@ -77,11 +76,11 @@ class ClawAgent(
     val clawMdExists = java.io.File(workDir, "CLAW.md").exists()
     println("Capybara Claw")
     println(s"  workdir  : $workDir")
-    println(s"  provider : ${clawConfig.provider}")
-    println(s"  model    : ${clawConfig.model}")
+    println(s"  provider : ${agentConfig.provider}")
+    println(s"  model    : ${agentConfig.model}")
     println(s"  thinking : ${agentConfig.thinking.getOrElse("off")}")
     println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
     println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
-    if clawConfig.classifiedPaths.nonEmpty then
-      println(s"  classify : ${clawConfig.classifiedPaths.mkString(", ")}")
+    if agentConfig.classifiedPaths.nonEmpty then
+      println(s"  classify : ${agentConfig.classifiedPaths.mkString(", ")}")
     println()

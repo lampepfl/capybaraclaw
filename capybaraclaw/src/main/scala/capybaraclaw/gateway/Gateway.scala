@@ -1,6 +1,6 @@
 package capybaraclaw.gateway
 
-import capybaraclaw.ClawAgent
+import capybaraclaw.agent.ClawAgent
 import gears.async.{Async, Future}
 import scala.collection.mutable
 

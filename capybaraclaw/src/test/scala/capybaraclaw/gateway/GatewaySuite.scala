@@ -1,6 +1,6 @@
 package capybaraclaw.gateway
 
-import capybaraclaw.ClawAgent
+import capybaraclaw.agent.ClawAgent
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import gears.async.default.given
 import tacit.agents.llm.endpoint.{
