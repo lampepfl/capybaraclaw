@@ -1,0 +1,37 @@
+name: Test
+
+on:
+  push:
+    branches:
+    - main
+    tags:
+    - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout capybaraclaw
+        uses: actions/checkout@v6
+      - name: Checkout tacit (agent-framework)
+        uses: actions/checkout@v6
+        with:
+          repository: lampepfl/tacit
+          ref: agent-framework
+          path: tacit
+      - name: Setup JVM and sbt
+        uses: VirtusLab/scala-cli-setup@v1.13.0
+        with:
+          jvm: 25
+          apps: sbt
+      - name: Publish tacit locally
+        working-directory: tacit
+        run: sbt publishLocal
+      - name: Run tests
+        run: sbt test
