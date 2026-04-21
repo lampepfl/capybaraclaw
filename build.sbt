@@ -18,7 +18,7 @@ ThisBuild / resolvers += Resolver.scalaNightlyRepository
 val stableScala3Version = "3.8.2"
 
 val tacitVersion = "0.1.4-SNAPSHOT"
-val tacitLibraryVersion = "0.1.0-SNAPSHOT"
+val tacitLibraryVersion = "0.1.4-SNAPSHOT"
 
 lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
   val (flags, positional) = args.partition(_.startsWith("--"))
@@ -85,8 +85,7 @@ lazy val capybaraclaw = project
       "com.slack.api" % "bolt" % "1.48.0",
       "com.slack.api" % "bolt-socket-mode" % "1.48.0",
       "org.glassfish.tyrus.bundles" % "tyrus-standalone-client" % "1.21",
-      ("lampepfl" %% "tacit" % tacitVersion)
-        .excludeAll(ExclusionRule("lampepfl", "tacit-agents_3")),
+      "lampepfl" %% "tacit" % tacitVersion,
       "lampepfl" %% "tacit-library" % tacitLibraryVersion intransitive(),
       "org.scalameta" %% "munit" % "1.2.2" % Test,
     ),

@@ -1,6 +1,6 @@
 package capybaraclaw.agent
 
-import tacit.core.{Context, Config}
+import tacit.core.{Context as TacitContext, Config as TacitConfig}
 import tacit.executor.ReplSession
 import tacit.agents.llm.endpoint.*
 import tacit.agents.llm.agentic.{Agent, AgentRun, AgentState, AgentError}
@@ -20,15 +20,15 @@ class ClawAgent(
 ):
   val agentConfig: AgentConfig = AgentConfig.load(workDir)
 
-  private given Context = Context(
-    Config(
-      restrictedWorkingDir = Some(workDir),
+  private val tacitContext: TacitContext = TacitContext(
+    TacitConfig(
       libraryConfig = Json.obj(
         "classifiedPaths" -> agentConfig.classifiedPaths.map(p => java.io.File(workDir, p).getCanonicalPath).asJson
       ),
     ),
     recorder = None,
   )
+  private val repl: ReplSession = ReplSession.create(using tacitContext)
 
   private given Endpoint = endpointOverride.getOrElse(agentConfig.provider match
     case "anthropic"  => AnthropicEndpoint.createFromEnv()
@@ -37,7 +37,6 @@ class ClawAgent(
     case "ollama"     => OllamaEndpoint.createFromEnv()
     case other        => throw RuntimeException(s"Unknown provider: $other"))
 
-  private val repl: ReplSession = ReplSession.create
 
   private val agent: Agent =
     val a = new Agent:
