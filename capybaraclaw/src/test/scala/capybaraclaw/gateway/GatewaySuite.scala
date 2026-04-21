@@ -22,6 +22,13 @@ import scala.jdk.CollectionConverters.*
 
 // --- Test doubles ---
 
+object FakePort:
+  /** Longer waits when `CAPYBARACLAW_CI` is `1` or `true` (e.g. GitHub Actions). */
+  def defaultReplyTimeoutMs: Long =
+    sys.env.get("CAPYBARACLAW_CI") match
+      case Some(v) if v == "1" || v.equalsIgnoreCase("true") => 60_000L
+      case _ => 5_000L
+
 /** Scripted LLM endpoint: on each `stream` call returns the next response from the
   * list as a single `StreamEvent.Done`. If responses are exhausted, returns an error.
   */
@@ -58,7 +65,7 @@ class FakePort(override val id: String) extends Port:
   def push(msg: GatewayMessage): Unit =
     inCh.sendImmediately(msg)
 
-  def nextReply(timeoutMs: Long = 3000): (ContextKey, String) =
+  def nextReply(timeoutMs: Long = FakePort.defaultReplyTimeoutMs): (ContextKey, String) =
     val got = sentReplies.poll(timeoutMs, TimeUnit.MILLISECONDS)
     if got == null then throw new AssertionError(s"No reply within ${timeoutMs}ms")
     got
