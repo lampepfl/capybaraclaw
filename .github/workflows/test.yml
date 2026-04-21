@@ -16,6 +16,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CAPYBARACLAW_CI: "1"
     steps:
       - name: Checkout capybaraclaw
         uses: actions/checkout@v6
@@ -26,7 +28,7 @@ jobs:
           ref: agent-framework
           path: tacit
       - name: Setup JVM and sbt
-        uses: VirtusLab/scala-cli-setup@v1.13.0
+        uses: VirtusLab/scala-cli-setup@v1
         with:
           jvm: 25
           apps: sbt
