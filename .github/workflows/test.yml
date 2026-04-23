@@ -21,11 +21,10 @@ jobs:
     steps:
       - name: Checkout capybaraclaw
         uses: actions/checkout@v6
-      - name: Checkout tacit (agent-framework)
+      - name: Checkout tacit
         uses: actions/checkout@v6
         with:
           repository: lampepfl/tacit
-          ref: agent-framework
           path: tacit
       - name: Setup JVM and sbt
         uses: VirtusLab/scala-cli-setup@v1
