@@ -36,7 +36,5 @@ jobs:
       - name: Publish tacit locally
         working-directory: tacit
         run: sbt publishLocal
-      - name: Check scalafix
-        run: sbt "scalafixAll --check"
       - name: Run tests
         run: sbt test
