@@ -6,9 +6,9 @@ import llm.endpoint.ToolSchema
 /** @param num Number of dice to roll */
 case class DiceArg(num: Int) derives IsToolArg
 case class MultiArg(
-  @desc("The player name") name: String,
-  @desc("How many items") count: Int,
-  @desc("Enable verbose output") verbose: Boolean,
+    @desc("The player name") name: String,
+    @desc("How many items") count: Int,
+    @desc("Enable verbose output") verbose: Boolean
 ) derives IsToolArg
 case class OptionalArg(name: String, tag: Option[String]) derives IsToolArg
 case class ListArg(names: List[String], counts: List[Int]) derives IsToolArg
@@ -40,15 +40,15 @@ case class MixedTags(x: Int, y: Int) derives IsToolArg
   */
 case class MultiLineParam(city: String, country: String) derives IsToolArg
 
-/**
-  * @param name   The    user's   name
+/** @param name   The    user's   name
   */
 case class ExtraWhitespace(name: String) derives IsToolArg
 
 /** @param described Has a description
   * @param undescribed
   */
-case class PartiallyDescribed(described: String, undescribed: String) derives IsToolArg
+case class PartiallyDescribed(described: String, undescribed: String)
+    derives IsToolArg
 
 /** @param a First
   * @param b Second
@@ -65,7 +65,8 @@ case class DocButNoParams(value: Int) derives IsToolArg
 
 /** @param annotated From annotation
   */
-case class DescOverridesParam(@desc("From @desc") annotated: String) derives IsToolArg
+case class DescOverridesParam(@desc("From @desc") annotated: String)
+    derives IsToolArg
 
 class ToolArgSuite extends munit.FunSuite:
 
@@ -119,7 +120,10 @@ class ToolArgSuite extends munit.FunSuite:
   test("schema: multiple @param tags"):
     val s = summon[IsToolArg[MultiParamDoc]].schema
     assertEquals(s.properties("query").description, "The search query")
-    assertEquals(s.properties("maxResults").description, "Maximum number of results")
+    assertEquals(
+      s.properties("maxResults").description,
+      "Maximum number of results"
+    )
 
   test("schema: @param with prose before it"):
     val s = summon[IsToolArg[DocWithProse]].schema
@@ -133,7 +137,10 @@ class ToolArgSuite extends munit.FunSuite:
   test("schema: multi-line @param description"):
     val s = summon[IsToolArg[MultiLineParam]].schema
     assertEquals(s.properties("city").description, "The city name")
-    assertEquals(s.properties("country").description, "The country where the city is located")
+    assertEquals(
+      s.properties("country").description,
+      "The country where the city is located"
+    )
 
   test("schema: extra whitespace in @param"):
     val s = summon[IsToolArg[ExtraWhitespace]].schema
@@ -153,7 +160,10 @@ class ToolArgSuite extends munit.FunSuite:
 
   test("schema: special characters in description"):
     val s = summon[IsToolArg[SpecialCharsInDesc]].schema
-    assertEquals(s.properties("first").description, "Has @special chars & symbols!")
+    assertEquals(
+      s.properties("first").description,
+      "Has @special chars & symbols!"
+    )
 
   test("schema: class docstring without @param tags"):
     val s = summon[IsToolArg[DocButNoParams]].schema
@@ -173,18 +183,19 @@ class ToolArgSuite extends munit.FunSuite:
     assertEquals(IsToolArg.parseParamTags(raw), Map("name" -> "The user name"))
 
   test("parseParamTags: multiple @param tags"):
-    val raw = Some(
-      """/** @param x First
-        |  * @param y Second
-        |  */""".stripMargin)
-    assertEquals(IsToolArg.parseParamTags(raw), Map("x" -> "First", "y" -> "Second"))
+    val raw = Some("""/** @param x First
+                     |  * @param y Second
+                     |  */""".stripMargin)
+    assertEquals(
+      IsToolArg.parseParamTags(raw),
+      Map("x" -> "First", "y" -> "Second")
+    )
 
   test("parseParamTags: @param mixed with @return"):
-    val raw = Some(
-      """/** @param a Alpha
-        |  * @return something
-        |  * @param b Beta
-        |  */""".stripMargin)
+    val raw = Some("""/** @param a Alpha
+                     |  * @return something
+                     |  * @param b Beta
+                     |  */""".stripMargin)
     val result = IsToolArg.parseParamTags(raw)
     assertEquals(result("a"), "Alpha")
     assertEquals(result("b"), "Beta")
@@ -208,31 +219,28 @@ class ToolArgSuite extends munit.FunSuite:
     assertEquals(IsToolArg.parseParamTags(raw), Map.empty)
 
   test("parseParamTags: @param followed by @throws"):
-    val raw = Some(
-      """/** @param input The input value
-        |  * @throws RuntimeException if input is negative
-        |  */""".stripMargin)
+    val raw = Some("""/** @param input The input value
+                     |  * @throws RuntimeException if input is negative
+                     |  */""".stripMargin)
     val result = IsToolArg.parseParamTags(raw)
     assertEquals(result, Map("input" -> "The input value"))
 
   test("parseParamTags: prose before @param"):
-    val raw = Some(
-      """/** This is a utility method.
-        |  *
-        |  * It does useful things.
-        |  *
-        |  * @param foo The foo value
-        |  */""".stripMargin)
+    val raw = Some("""/** This is a utility method.
+                     |  *
+                     |  * It does useful things.
+                     |  *
+                     |  * @param foo The foo value
+                     |  */""".stripMargin)
     assertEquals(IsToolArg.parseParamTags(raw), Map("foo" -> "The foo value"))
 
   test("parseParamTags: many @param tags"):
-    val raw = Some(
-      """/** @param a First
-        |  * @param b Second
-        |  * @param c Third
-        |  * @param d Fourth
-        |  * @param e Fifth
-        |  */""".stripMargin)
+    val raw = Some("""/** @param a First
+                     |  * @param b Second
+                     |  * @param c Third
+                     |  * @param d Fourth
+                     |  * @param e Fifth
+                     |  */""".stripMargin)
     val result = IsToolArg.parseParamTags(raw)
     assertEquals(result.size, 5)
     assertEquals(result("a"), "First")
@@ -277,7 +285,12 @@ class ToolArgSuite extends munit.FunSuite:
   test("parse: invalid JSON returns Left with invalidJson error"):
     val result = summon[IsToolArg[DiceArg]].parse("not json")
     assert(result.isLeft)
-    assert(result.swap.getOrElse(fail("expected Left")).message.startsWith("Invalid JSON"))
+    assert(
+      result.swap
+        .getOrElse(fail("expected Left"))
+        .message
+        .startsWith("Invalid JSON")
+    )
 
   test("parse: wrong type returns Left with typeMismatch error"):
     val result = summon[IsToolArg[DiceArg]].parse("""{"num": "hello"}""")
@@ -287,4 +300,9 @@ class ToolArgSuite extends munit.FunSuite:
   test("parse: missing required field returns Left with missingField error"):
     val result = summon[IsToolArg[MultiArg]].parse("""{"name": "test"}""")
     assert(result.isLeft)
-    assert(result.swap.getOrElse(fail("expected Left")).message.contains("Missing required field"))
+    assert(
+      result.swap
+        .getOrElse(fail("expected Left"))
+        .message
+        .contains("Missing required field")
+    )

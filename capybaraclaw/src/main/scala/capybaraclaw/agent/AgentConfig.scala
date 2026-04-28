@@ -5,19 +5,19 @@ import tacit.agents.llm.endpoint.{EffortLevel, LLMConfig, ThinkingMode}
 /** Configuration for a Claw agent instance.
   */
 case class AgentConfig(
-  workDir: String,
-  provider: String = "openrouter",
-  model: String = "minimax/minimax-m2.7",
-  maxTokens: Int = 16000,
-  thinking: Option[ThinkingMode] = None,
-  classifiedPaths: List[String] = Nil,
+    workDir: String,
+    provider: String = "openrouter",
+    model: String = "minimax/minimax-m2.7",
+    maxTokens: Int = 16000,
+    thinking: Option[ThinkingMode] = None,
+    classifiedPaths: List[String] = Nil
 ):
   def toLLMConfig: LLMConfig =
     LLMConfig(
       model = model,
       systemPrompt = Some(AgentConfig.buildSystemPrompt(this)),
       maxTokens = Some(maxTokens),
-      thinking = thinking,
+      thinking = thinking
     )
 
 object AgentConfig:
@@ -27,7 +27,8 @@ object AgentConfig:
   def load(workDir: String): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
     val obj =
-      if file.exists() then ujson.read(scala.io.Source.fromFile(file).mkString).obj
+      if file.exists() then
+        ujson.read(scala.io.Source.fromFile(file).mkString).obj
       else ujson.Obj().value
     val provider = obj.get("provider").map(_.str).getOrElse("openrouter")
     AgentConfig(
@@ -36,16 +37,20 @@ object AgentConfig:
       model = obj.get("model").map(_.str).getOrElse("minimax/minimax-m2.7"),
       maxTokens = obj.get("max_tokens").map(_.num.toInt).getOrElse(16000),
       thinking = deriveThinking(provider),
-      classifiedPaths = obj.get("classified_paths").map(_.arr.map(_.str).toList).getOrElse(Nil),
+      classifiedPaths =
+        obj.get("classified_paths").map(_.arr.map(_.str).toList).getOrElse(Nil)
     )
 
-  private def deriveThinking(provider: String): Option[ThinkingMode] = provider match
-    case "anthropic"                        => Some(ThinkingMode.Budget(2048))
-    case "openai" | "openrouter" | "ollama" => Some(ThinkingMode.Effort(EffortLevel.Medium))
-    case _                                  => None
+  private def deriveThinking(provider: String): Option[ThinkingMode] =
+    provider match
+      case "anthropic"                        => Some(ThinkingMode.Budget(2048))
+      case "openai" | "openrouter" | "ollama" =>
+        Some(ThinkingMode.Effort(EffortLevel.Medium))
+      case _ => None
 
   private def loadInterfaceSource(): String =
-    val stream = classOf[AgentConfig].getClassLoader.getResourceAsStream("Interface.scala")
+    val stream =
+      classOf[AgentConfig].getClassLoader.getResourceAsStream("Interface.scala")
     if stream != null then
       try scala.io.Source.fromInputStream(stream).mkString
       finally stream.close()
@@ -84,8 +89,7 @@ $interfaceSource
 ```
 </library_api>""")
 
-    if config.classifiedPaths.nonEmpty then
-      sb.append(s"""
+    if config.classifiedPaths.nonEmpty then sb.append(s"""
 
 <classified_paths>
 The following paths should be classified:

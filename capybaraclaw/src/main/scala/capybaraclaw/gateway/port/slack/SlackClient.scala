@@ -3,7 +3,10 @@ package capybaraclaw.gateway.port.slack
 import com.slack.api.Slack
 import com.slack.api.methods.MethodsClient
 import com.slack.api.methods.request.chat.ChatPostMessageRequest
-import com.slack.api.methods.request.conversations.{ConversationsHistoryRequest, ConversationsInfoRequest}
+import com.slack.api.methods.request.conversations.{
+  ConversationsHistoryRequest,
+  ConversationsInfoRequest
+}
 import com.slack.api.methods.request.users.UsersInfoRequest
 import com.slack.api.bolt.{App, AppConfig}
 import com.slack.api.bolt.socket_mode.SocketModeApp
@@ -16,13 +19,13 @@ import scala.collection.mutable
 
 /** A message channel in Slack. */
 case class Channel(
-  id: String,
-  name: String,
-  topic: String,
-  purpose: String,
-  isPrivate: Boolean,
-  isIm: Boolean,
-  isArchived: Boolean,
+    id: String,
+    name: String,
+    topic: String,
+    purpose: String,
+    isPrivate: Boolean,
+    isIm: Boolean,
+    isArchived: Boolean
 )
 
 object Channel:
@@ -34,14 +37,14 @@ object Channel:
       purpose = Option(c.getPurpose).map(_.getValue.nn).getOrElse(""),
       isPrivate = c.isPrivate,
       isIm = c.isIm,
-      isArchived = c.isArchived,
+      isArchived = c.isArchived
     )
 
 case class User(
-  id: String,
-  name: String,
-  realName: String,
-  displayName: String,
+    id: String,
+    name: String,
+    realName: String,
+    displayName: String
 )
 
 object User:
@@ -50,27 +53,35 @@ object User:
       id = u.getId.nn,
       name = Option(u.getName).getOrElse(""),
       realName = Option(u.getRealName).getOrElse(""),
-      displayName = Option(u.getProfile).flatMap(p => Option(p.getDisplayName)).getOrElse(""),
+      displayName = Option(u.getProfile)
+        .flatMap(p => Option(p.getDisplayName))
+        .getOrElse("")
     )
 
 enum MessageOrigin(val channelId: String):
-  case DirectMessage(override val channelId: String) extends MessageOrigin(channelId)
-  case GroupMessage(override val channelId: String) extends MessageOrigin(channelId)
-  case ChannelMessage(override val channelId: String) extends MessageOrigin(channelId)
+  case DirectMessage(override val channelId: String)
+      extends MessageOrigin(channelId)
+  case GroupMessage(override val channelId: String)
+      extends MessageOrigin(channelId)
+  case ChannelMessage(override val channelId: String)
+      extends MessageOrigin(channelId)
 
 object MessageOrigin:
-  def fromChannelType(channelType: String | Null, channelId: String): MessageOrigin =
+  def fromChannelType(
+      channelType: String | Null,
+      channelId: String
+  ): MessageOrigin =
     channelType match
       case "im" | "direct_message" => DirectMessage(channelId)
-      case "mpim" | "group" => GroupMessage(channelId)
-      case _ => ChannelMessage(channelId)
+      case "mpim" | "group"        => GroupMessage(channelId)
+      case _                       => ChannelMessage(channelId)
 
 case class Message(
-  userId: String,
-  text: String,
-  ts: String,
-  threadTs: Option[String],
-  origin: MessageOrigin,
+    userId: String,
+    text: String,
+    ts: String,
+    threadTs: Option[String],
+    origin: MessageOrigin
 )
 
 // --- Client ---
@@ -97,15 +108,22 @@ class SlackClient(botToken: String, appToken: String):
     * Splits into multiple messages if text exceeds the 12k char limit.
     * When `threadTs` is provided, the message is posted as a reply in that thread.
     */
-  def sendMessage(channel: String, text: String, threadTs: Option[String] = None): String =
+  def sendMessage(
+      channel: String,
+      text: String,
+      threadTs: Option[String] = None
+  ): String =
     val chunks = splitMessage(text)
     var lastTs = ""
     for chunk <- chunks do
-      val builder = ChatPostMessageRequest.builder()
+      val builder = ChatPostMessageRequest
+        .builder()
         .channel(channel)
-        .blocks(java.util.List.of(
-          com.slack.api.model.block.Blocks.markdown(m => m.text(chunk))
-        ))
+        .blocks(
+          java.util.List.of(
+            com.slack.api.model.block.Blocks.markdown(m => m.text(chunk))
+          )
+        )
         .text(chunk) // fallback for notifications
       threadTs.foreach(ts => builder.threadTs(ts))
       val response = methods.chatPostMessage(builder.build())
@@ -142,7 +160,8 @@ class SlackClient(botToken: String, appToken: String):
   /** Read recent messages from a channel. */
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     val response = methods.conversationsHistory(
-      ConversationsHistoryRequest.builder()
+      ConversationsHistoryRequest
+        .builder()
         .channel(channel)
         .limit(limit)
         .build()
@@ -155,34 +174,39 @@ class SlackClient(botToken: String, appToken: String):
         text = Option(msg.getText).getOrElse(""),
         ts = Option(msg.getTs).getOrElse(""),
         threadTs = Option(msg.getThreadTs),
-        origin = MessageOrigin.ChannelMessage(channel),
+        origin = MessageOrigin.ChannelMessage(channel)
       )
 
   // --- Socket Mode listener (starts immediately) ---
 
   private val incomingMessages = UnboundedChannel[Message]()
   private val socketModeApp: SocketModeApp =
-    val appConfig = AppConfig.builder()
+    val appConfig = AppConfig
+      .builder()
       .singleTeamBotToken(botToken)
       .build()
     val app = App(appConfig)
 
-    app.event(classOf[MessageEvent], (payload, ctx) => {
-      val event = payload.getEvent.nn
-      val text = event.getText
-      val channel = event.getChannel
-      val subtype = event.getSubtype
-      if subtype == null && text != null && channel != null then
-        val msg = Message(
-          userId = Option(event.getUser).getOrElse(""),
-          text = text,
-          ts = Option(event.getTs).getOrElse(""),
-          threadTs = Option(event.getThreadTs),
-          origin = MessageOrigin.fromChannelType(event.getChannelType, channel),
-        )
-        incomingMessages.sendImmediately(msg)
-      ctx.ack()
-    })
+    app.event(
+      classOf[MessageEvent],
+      (payload, ctx) => {
+        val event = payload.getEvent.nn
+        val text = event.getText
+        val channel = event.getChannel
+        val subtype = event.getSubtype
+        if subtype == null && text != null && channel != null then
+          val msg = Message(
+            userId = Option(event.getUser).getOrElse(""),
+            text = text,
+            ts = Option(event.getTs).getOrElse(""),
+            threadTs = Option(event.getThreadTs),
+            origin =
+              MessageOrigin.fromChannelType(event.getChannelType, channel)
+          )
+          incomingMessages.sendImmediately(msg)
+        ctx.ack()
+      }
+    )
 
     val sma = SocketModeApp(appToken, app)
     sma.startAsync()
@@ -199,7 +223,9 @@ class SlackClient(botToken: String, appToken: String):
       ConversationsInfoRequest.builder().channel(id).build()
     )
     if !response.isOk then
-      throw RuntimeException(s"Slack API error (conversations.info): ${response.getError}")
+      throw RuntimeException(
+        s"Slack API error (conversations.info): ${response.getError}"
+      )
     Channel.fromConversation(response.getChannel.nn)
 
   private def fetchUser(id: String): User =
@@ -207,5 +233,7 @@ class SlackClient(botToken: String, appToken: String):
       UsersInfoRequest.builder().user(id).build()
     )
     if !response.isOk then
-      throw RuntimeException(s"Slack API error (users.info): ${response.getError}")
+      throw RuntimeException(
+        s"Slack API error (users.info): ${response.getError}"
+      )
     User.fromSdkUser(response.getUser.nn)

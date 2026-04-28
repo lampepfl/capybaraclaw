@@ -11,8 +11,13 @@ class EndpointNetworkSuite extends munit.FunSuite:
   /** Check once whether a local Ollama server is reachable. */
   private lazy val ollamaAvailable: Boolean =
     try
-      val url = sys.env.getOrElse("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-      val conn = java.net.URI(s"$url/models").toURL.openConnection().asInstanceOf[java.net.HttpURLConnection]
+      val url =
+        sys.env.getOrElse("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+      val conn = java.net
+        .URI(s"$url/models")
+        .toURL
+        .openConnection()
+        .asInstanceOf[java.net.HttpURLConnection]
       conn.setConnectTimeout(2000)
       conn.setReadTimeout(2000)
       conn.getResponseCode == 200
@@ -24,9 +29,10 @@ class EndpointNetworkSuite extends munit.FunSuite:
     * so reading past the terminator would block forever.
     */
   private def readAll(
-    ch: gears.async.ReadableChannel[Result[StreamEvent, LLMError]]
+      ch: gears.async.ReadableChannel[Result[StreamEvent, LLMError]]
   )(using Async): List[Result[StreamEvent, LLMError]] =
-    val buf = scala.collection.mutable.ListBuffer[Result[StreamEvent, LLMError]]()
+    val buf =
+      scala.collection.mutable.ListBuffer[Result[StreamEvent, LLMError]]()
     var reading = true
     while reading do
       ch.read() match
@@ -40,7 +46,9 @@ class EndpointNetworkSuite extends munit.FunSuite:
           reading = false
     buf.toList
 
-  test("OpenAICompletionEndpoint.createFromEnv reads OPENAI_API_KEY".tag(Network)):
+  test(
+    "OpenAICompletionEndpoint.createFromEnv reads OPENAI_API_KEY".tag(Network)
+  ):
     assume(sys.env.contains("OPENAI_API_KEY"), "OPENAI_API_KEY not set")
     val endpoint = OpenAICompletionEndpoint.createFromEnv()
     assert(endpoint.isInstanceOf[OpenAICompletionEndpoint])
@@ -59,7 +67,9 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val response = result.toOption.get
     assert(response.message.role == Role.Assistant)
     assert(response.message.text.nonEmpty)
-    assert(response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens)
+    assert(
+      response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens
+    )
 
   test("OpenAICompletionEndpoint.invoke with system prompt".tag(Network)):
     assume(sys.env.contains("OPENAI_API_KEY"), "OPENAI_API_KEY not set")
@@ -67,17 +77,22 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(16),
-      systemPrompt = Some("You are a helpful assistant. Reply only with the word PONG."),
+      systemPrompt =
+        Some("You are a helpful assistant. Reply only with the word PONG.")
     )
     val result = endpoint.invoke(List(Message.user("PING")), config)
     assert(result.isRight, s"Expected Right but got $result")
     assert(result.toOption.get.message.text.contains("PONG"))
 
-  test("OpenAICompletionEndpoint.invoke with invalid key returns Left".tag(Network)):
-    val endpoint = OpenAICompletionEndpoint.create(EndpointConfig(
-      baseUrl = "https://api.openai.com/v1",
-      apiKey = "sk-invalid",
-    ))
+  test(
+    "OpenAICompletionEndpoint.invoke with invalid key returns Left".tag(Network)
+  ):
+    val endpoint = OpenAICompletionEndpoint.create(
+      EndpointConfig(
+        baseUrl = "https://api.openai.com/v1",
+        apiKey = "sk-invalid"
+      )
+    )
     val config = LLMConfig(model = "gpt-5.4-mini", maxTokens = Some(16))
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)
@@ -91,7 +106,9 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val response = result.toOption.get
     assert(response.message.role == Role.Assistant)
     assert(response.message.text.nonEmpty)
-    assert(response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens)
+    assert(
+      response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens
+    )
     assert(response.usage.isDefined)
 
   test("AnthropicEndpoint.invoke with system prompt".tag(Network)):
@@ -100,17 +117,20 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "claude-haiku-4-5",
       maxTokens = Some(16),
-      systemPrompt = Some("You are a helpful assistant. Reply only with the word PONG."),
+      systemPrompt =
+        Some("You are a helpful assistant. Reply only with the word PONG.")
     )
     val result = endpoint.invoke(List(Message.user("PING")), config)
     assert(result.isRight, s"Expected Right but got $result")
     assert(result.toOption.get.message.text.contains("PONG"))
 
   test("AnthropicEndpoint.invoke with invalid key returns Left".tag(Network)):
-    val endpoint = AnthropicEndpoint.create(EndpointConfig(
-      baseUrl = "https://api.anthropic.com",
-      apiKey = "sk-ant-invalid",
-    ))
+    val endpoint = AnthropicEndpoint.create(
+      EndpointConfig(
+        baseUrl = "https://api.anthropic.com",
+        apiKey = "sk-ant-invalid"
+      )
+    )
     val config = LLMConfig(model = "claude-haiku-4-5", maxTokens = Some(16))
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)
@@ -120,10 +140,11 @@ class EndpointNetworkSuite extends munit.FunSuite:
     description = "Get the current weather in a given location",
     parameters = ToolSchema.Parameters(
       properties = Map(
-        "location" -> ToolSchema.Property(`type` = "string", description = "The city name"),
+        "location" -> ToolSchema
+          .Property(`type` = "string", description = "The city name")
       ),
-      required = List("location"),
-    ),
+      required = List("location")
+    )
   )
 
   test("OpenAICompletionEndpoint.invoke with tool calling".tag(Network)):
@@ -132,17 +153,25 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(64),
-      tools = List(weatherTool),
+      tools = List(weatherTool)
     )
-    val result = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result.isRight, s"Expected Right but got $result")
     val response = result.toOption.get
     assert(response.finishReason == FinishReason.ToolUse)
-    val toolUses = response.message.content.collect { case c: Content.ToolUse => c }
+    val toolUses = response.message.content.collect { case c: Content.ToolUse =>
+      c
+    }
     assert(toolUses.nonEmpty, "Expected at least one tool use")
     assert(toolUses.head.name == "get_weather")
     val parsedInput = ujson.read(toolUses.head.input)
-    assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+    assert(
+      parsedInput.obj.contains("location"),
+      s"Expected 'location' field in: ${toolUses.head.input}"
+    )
     assert(toolUses.head.input.contains("Paris"))
 
   // Streaming tests: text
@@ -189,7 +218,7 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "o4-mini",
       maxTokens = Some(2048),
-      thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+      thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
     )
     val result = endpoint.invoke(List(Message.user("What is 17 * 23?")), config)
     assert(result.isRight, s"Expected Right but got $result")
@@ -203,11 +232,14 @@ class EndpointNetworkSuite extends munit.FunSuite:
       val config = LLMConfig(
         model = "o4-mini",
         maxTokens = Some(2048),
-        thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+        thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
       )
       val ch = endpoint.stream(List(Message.user("What is 17 * 23?")), config)
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
       val textDeltas = streamEvents.collect { case StreamEvent.Delta(t) => t }
       assert(textDeltas.nonEmpty, "Expected text Delta events")
@@ -223,30 +255,51 @@ class EndpointNetworkSuite extends munit.FunSuite:
       val config = LLMConfig(
         model = "gpt-5.4-mini",
         maxTokens = Some(64),
-        tools = List(weatherTool),
+        tools = List(weatherTool)
       )
-      val ch = endpoint.stream(List(Message.user("What is the weather in Paris?")), config)
+      val ch = endpoint.stream(
+        List(Message.user("What is the weather in Paris?")),
+        config
+      )
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
-      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart => s }
+      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart =>
+        s
+      }
       assert(starts.nonEmpty, "Expected at least one ToolCallStart event")
       assert(starts.head.name == "get_weather")
       assert(starts.head.id.nonEmpty)
-      val toolDeltas = streamEvents.collect { case d: StreamEvent.ToolCallDelta => d }
+      val toolDeltas = streamEvents.collect {
+        case d: StreamEvent.ToolCallDelta => d
+      }
       assert(toolDeltas.nonEmpty, "Expected at least one ToolCallDelta event")
       val fullArgs = toolDeltas.map(_.argumentDelta).mkString
-      assert(fullArgs.contains("Paris"), s"Expected tool args to contain Paris but got: $fullArgs")
+      assert(
+        fullArgs.contains("Paris"),
+        s"Expected tool args to contain Paris but got: $fullArgs"
+      )
       val parsedArgs = ujson.read(fullArgs)
-      assert(parsedArgs.obj.contains("location"), s"Expected 'location' field in streamed args: $fullArgs")
+      assert(
+        parsedArgs.obj.contains("location"),
+        s"Expected 'location' field in streamed args: $fullArgs"
+      )
       val done = streamEvents.collectFirst { case d: StreamEvent.Done => d }
       assert(done.isDefined, "Expected Done event")
       assert(done.get.response.finishReason == FinishReason.ToolUse)
-      val toolUses = done.get.response.message.content.collect { case c: Content.ToolUse => c }
+      val toolUses = done.get.response.message.content.collect {
+        case c: Content.ToolUse => c
+      }
       assert(toolUses.nonEmpty)
       assert(toolUses.head.name == "get_weather")
       val parsedInput = ujson.read(toolUses.head.input)
-      assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+      assert(
+        parsedInput.obj.contains("location"),
+        s"Expected 'location' field in: ${toolUses.head.input}"
+      )
       assert(toolUses.head.input.contains("Paris"))
 
   test("AnthropicEndpoint.stream with tool calling".tag(Network)):
@@ -257,30 +310,56 @@ class EndpointNetworkSuite extends munit.FunSuite:
         model = "claude-haiku-4-5",
         maxTokens = Some(256),
         tools = List(weatherTool),
-        systemPrompt = Some("Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."),
+        systemPrompt = Some(
+          "Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."
+        )
       )
-      val ch = endpoint.stream(List(Message.user("What is the weather in Paris?")), config)
+      val ch = endpoint.stream(
+        List(Message.user("What is the weather in Paris?")),
+        config
+      )
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
-      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart => s }
+      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart =>
+        s
+      }
       assert(starts.nonEmpty, "Expected at least one ToolCallStart event")
       assert(starts.head.name == "get_weather")
       assert(starts.head.id.nonEmpty)
-      val toolDeltas = streamEvents.collect { case d: StreamEvent.ToolCallDelta => d }
+      val toolDeltas = streamEvents.collect {
+        case d: StreamEvent.ToolCallDelta => d
+      }
       assert(toolDeltas.nonEmpty, "Expected at least one ToolCallDelta event")
-      val fullArgs = toolDeltas.filter(_.index == starts.head.index).map(_.argumentDelta).mkString
-      assert(fullArgs.contains("Paris"), s"Expected tool args to contain Paris but got: $fullArgs")
+      val fullArgs = toolDeltas
+        .filter(_.index == starts.head.index)
+        .map(_.argumentDelta)
+        .mkString
+      assert(
+        fullArgs.contains("Paris"),
+        s"Expected tool args to contain Paris but got: $fullArgs"
+      )
       val parsedArgs = ujson.read(fullArgs)
-      assert(parsedArgs.obj.contains("location"), s"Expected 'location' field in streamed args: $fullArgs")
+      assert(
+        parsedArgs.obj.contains("location"),
+        s"Expected 'location' field in streamed args: $fullArgs"
+      )
       val done = streamEvents.collectFirst { case d: StreamEvent.Done => d }
       assert(done.isDefined, "Expected Done event")
       assert(done.get.response.finishReason == FinishReason.ToolUse)
-      val toolUses = done.get.response.message.content.collect { case c: Content.ToolUse => c }
+      val toolUses = done.get.response.message.content.collect {
+        case c: Content.ToolUse => c
+      }
       assert(toolUses.nonEmpty)
       assert(toolUses.head.name == "get_weather")
       val parsedInput = ujson.read(toolUses.head.input)
-      assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+      assert(
+        parsedInput.obj.contains("location"),
+        s"Expected 'location' field in: ${toolUses.head.input}"
+      )
       assert(toolUses.head.input.contains("Paris"))
 
   // OpenAIEndpoint tests
@@ -294,7 +373,9 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val response = result.toOption.get
     assert(response.message.role == Role.Assistant)
     assert(response.message.text.nonEmpty)
-    assert(response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens)
+    assert(
+      response.finishReason == FinishReason.Stop || response.finishReason == FinishReason.MaxTokens
+    )
 
   test("OpenAIEndpoint.invoke with system prompt".tag(Network)):
     assume(sys.env.contains("OPENAI_API_KEY"), "OPENAI_API_KEY not set")
@@ -302,17 +383,20 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(16),
-      systemPrompt = Some("You are a helpful assistant. Reply only with the word PONG."),
+      systemPrompt =
+        Some("You are a helpful assistant. Reply only with the word PONG.")
     )
     val result = endpoint.invoke(List(Message.user("PING")), config)
     assert(result.isRight, s"Expected Right but got $result")
     assert(result.toOption.get.message.text.contains("PONG"))
 
   test("OpenAIEndpoint.invoke with invalid key returns Left".tag(Network)):
-    val endpoint = OpenAIEndpoint.create(EndpointConfig(
-      baseUrl = "https://api.openai.com/v1",
-      apiKey = "sk-invalid",
-    ))
+    val endpoint = OpenAIEndpoint.create(
+      EndpointConfig(
+        baseUrl = "https://api.openai.com/v1",
+        apiKey = "sk-invalid"
+      )
+    )
     val config = LLMConfig(model = "gpt-5.4-mini", maxTokens = Some(16))
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)
@@ -323,17 +407,25 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(64),
-      tools = List(weatherTool),
+      tools = List(weatherTool)
     )
-    val result = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result.isRight, s"Expected Right but got $result")
     val response = result.toOption.get
     assert(response.finishReason == FinishReason.ToolUse)
-    val toolUses = response.message.content.collect { case c: Content.ToolUse => c }
+    val toolUses = response.message.content.collect { case c: Content.ToolUse =>
+      c
+    }
     assert(toolUses.nonEmpty, "Expected at least one tool use")
     assert(toolUses.head.name == "get_weather")
     val parsedInput = ujson.read(toolUses.head.input)
-    assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+    assert(
+      parsedInput.obj.contains("location"),
+      s"Expected 'location' field in: ${toolUses.head.input}"
+    )
     assert(toolUses.head.input.contains("Paris"))
 
   test("OpenAIEndpoint.stream text response".tag(Network)):
@@ -360,30 +452,51 @@ class EndpointNetworkSuite extends munit.FunSuite:
       val config = LLMConfig(
         model = "gpt-5.4-mini",
         maxTokens = Some(64),
-        tools = List(weatherTool),
+        tools = List(weatherTool)
       )
-      val ch = endpoint.stream(List(Message.user("What is the weather in Paris?")), config)
+      val ch = endpoint.stream(
+        List(Message.user("What is the weather in Paris?")),
+        config
+      )
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
-      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart => s }
+      val starts = streamEvents.collect { case s: StreamEvent.ToolCallStart =>
+        s
+      }
       assert(starts.nonEmpty, "Expected at least one ToolCallStart event")
       assert(starts.head.name == "get_weather")
       assert(starts.head.id.nonEmpty)
-      val toolDeltas = streamEvents.collect { case d: StreamEvent.ToolCallDelta => d }
+      val toolDeltas = streamEvents.collect {
+        case d: StreamEvent.ToolCallDelta => d
+      }
       assert(toolDeltas.nonEmpty, "Expected at least one ToolCallDelta event")
       val fullArgs = toolDeltas.map(_.argumentDelta).mkString
-      assert(fullArgs.contains("Paris"), s"Expected tool args to contain Paris but got: $fullArgs")
+      assert(
+        fullArgs.contains("Paris"),
+        s"Expected tool args to contain Paris but got: $fullArgs"
+      )
       val parsedArgs = ujson.read(fullArgs)
-      assert(parsedArgs.obj.contains("location"), s"Expected 'location' field in streamed args: $fullArgs")
+      assert(
+        parsedArgs.obj.contains("location"),
+        s"Expected 'location' field in streamed args: $fullArgs"
+      )
       val done = streamEvents.collectFirst { case d: StreamEvent.Done => d }
       assert(done.isDefined, "Expected Done event")
       assert(done.get.response.finishReason == FinishReason.ToolUse)
-      val toolUses = done.get.response.message.content.collect { case c: Content.ToolUse => c }
+      val toolUses = done.get.response.message.content.collect {
+        case c: Content.ToolUse => c
+      }
       assert(toolUses.nonEmpty)
       assert(toolUses.head.name == "get_weather")
       val parsedInput = ujson.read(toolUses.head.input)
-      assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+      assert(
+        parsedInput.obj.contains("location"),
+        s"Expected 'location' field in: ${toolUses.head.input}"
+      )
       assert(toolUses.head.input.contains("Paris"))
 
   test("OpenAIEndpoint.invoke with thinking".tag(Network)):
@@ -392,7 +505,7 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "o4-mini",
       maxTokens = Some(2048),
-      thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+      thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
     )
     val result = endpoint.invoke(List(Message.user("What is 17 * 23?")), config)
     assert(result.isRight, s"Expected Right but got $result")
@@ -407,13 +520,18 @@ class EndpointNetworkSuite extends munit.FunSuite:
       val config = LLMConfig(
         model = "o4-mini",
         maxTokens = Some(2048),
-        thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+        thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
       )
       val ch = endpoint.stream(List(Message.user("What is 17 * 23?")), config)
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
-      val thinkingDeltas = streamEvents.collect { case StreamEvent.ThinkingDelta(t) => t }
+      val thinkingDeltas = streamEvents.collect {
+        case StreamEvent.ThinkingDelta(t) => t
+      }
       assert(thinkingDeltas.nonEmpty, "Expected ThinkingDelta events")
       val textDeltas = streamEvents.collect { case StreamEvent.Delta(t) => t }
       assert(textDeltas.nonEmpty, "Expected text Delta events")
@@ -430,17 +548,27 @@ class EndpointNetworkSuite extends munit.FunSuite:
       model = "claude-haiku-4-5",
       maxTokens = Some(256),
       tools = List(weatherTool),
-      systemPrompt = Some("Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."),
+      systemPrompt = Some(
+        "Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."
+      )
     )
-    val result = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result.isRight, s"Expected Right but got $result")
     val response = result.toOption.get
     assert(response.finishReason == FinishReason.ToolUse)
-    val toolUses = response.message.content.collect { case c: Content.ToolUse => c }
+    val toolUses = response.message.content.collect { case c: Content.ToolUse =>
+      c
+    }
     assert(toolUses.nonEmpty, "Expected at least one tool use")
     assert(toolUses.head.name == "get_weather")
     val parsedInput = ujson.read(toolUses.head.input)
-    assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+    assert(
+      parsedInput.obj.contains("location"),
+      s"Expected 'location' field in: ${toolUses.head.input}"
+    )
     assert(toolUses.head.input.contains("Paris"))
 
   // Thinking tests
@@ -451,7 +579,7 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "claude-haiku-4-5",
       maxTokens = Some(2048),
-      thinking = Some(ThinkingMode.Budget(1024)),
+      thinking = Some(ThinkingMode.Budget(1024))
     )
     val result = endpoint.invoke(List(Message.user("What is 17 * 23?")), config)
     assert(result.isRight, s"Expected Right but got $result")
@@ -466,13 +594,18 @@ class EndpointNetworkSuite extends munit.FunSuite:
       val config = LLMConfig(
         model = "claude-haiku-4-5",
         maxTokens = Some(2048),
-        thinking = Some(ThinkingMode.Budget(1024)),
+        thinking = Some(ThinkingMode.Budget(1024))
       )
       val ch = endpoint.stream(List(Message.user("What is 17 * 23?")), config)
       val collected = readAll(ch)
-      assert(collected.forall(_.isRight), s"Expected all Right but got ${collected.filter(_.isLeft)}")
+      assert(
+        collected.forall(_.isRight),
+        s"Expected all Right but got ${collected.filter(_.isLeft)}"
+      )
       val streamEvents = collected.map(_.toOption.get)
-      val thinkingDeltas = streamEvents.collect { case StreamEvent.ThinkingDelta(t) => t }
+      val thinkingDeltas = streamEvents.collect {
+        case StreamEvent.ThinkingDelta(t) => t
+      }
       assert(thinkingDeltas.nonEmpty, "Expected ThinkingDelta events")
       val textDeltas = streamEvents.collect { case StreamEvent.Delta(t) => t }
       assert(textDeltas.nonEmpty, "Expected text Delta events")
@@ -490,17 +623,25 @@ class EndpointNetworkSuite extends munit.FunSuite:
       model = "o4-mini",
       maxTokens = Some(2048),
       tools = List(weatherTool),
-      thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+      thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
     )
-    val result = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result.isRight, s"Expected Right but got $result")
     val response = result.toOption.get
     assert(response.finishReason == FinishReason.ToolUse)
-    val toolUses = response.message.content.collect { case c: Content.ToolUse => c }
+    val toolUses = response.message.content.collect { case c: Content.ToolUse =>
+      c
+    }
     assert(toolUses.nonEmpty, "Expected at least one tool use")
     assert(toolUses.head.name == "get_weather")
     val parsedInput = ujson.read(toolUses.head.input)
-    assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+    assert(
+      parsedInput.obj.contains("location"),
+      s"Expected 'location' field in: ${toolUses.head.input}"
+    )
     assert(toolUses.head.input.contains("Paris"))
 
   test("AnthropicEndpoint.invoke with tool calling and thinking".tag(Network)):
@@ -511,17 +652,27 @@ class EndpointNetworkSuite extends munit.FunSuite:
       maxTokens = Some(2048),
       tools = List(weatherTool),
       thinking = Some(ThinkingMode.Budget(1024)),
-      systemPrompt = Some("Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."),
+      systemPrompt = Some(
+        "Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."
+      )
     )
-    val result = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result.isRight, s"Expected Right but got $result")
     val response = result.toOption.get
     assert(response.finishReason == FinishReason.ToolUse)
-    val toolUses = response.message.content.collect { case c: Content.ToolUse => c }
+    val toolUses = response.message.content.collect { case c: Content.ToolUse =>
+      c
+    }
     assert(toolUses.nonEmpty, "Expected at least one tool use")
     assert(toolUses.head.name == "get_weather")
     val parsedInput = ujson.read(toolUses.head.input)
-    assert(parsedInput.obj.contains("location"), s"Expected 'location' field in: ${toolUses.head.input}")
+    assert(
+      parsedInput.obj.contains("location"),
+      s"Expected 'location' field in: ${toolUses.head.input}"
+    )
     assert(toolUses.head.input.contains("Paris"))
 
   // Round-trip tool call tests: invoke → parse args with IsToolArg → tool result → invoke again
@@ -535,14 +686,21 @@ class EndpointNetworkSuite extends munit.FunSuite:
       model = "claude-haiku-4-5",
       maxTokens = Some(256),
       tools = List(weatherTool),
-      systemPrompt = Some("Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."),
+      systemPrompt = Some(
+        "Use the provided tools to answer questions. Do not respond with text, just call the appropriate tool."
+      )
     )
     // Step 1: invoke → get tool call
-    val result1 = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result1 = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result1.isRight, s"Step 1 failed: $result1")
     val response1 = result1.toOption.get
     assert(response1.finishReason == FinishReason.ToolUse)
-    val toolUse = response1.message.content.collectFirst { case c: Content.ToolUse => c }.get
+    val toolUse = response1.message.content.collectFirst {
+      case c: Content.ToolUse => c
+    }.get
     // Step 2: parse args through IsToolArg (would fail on invalid JSON)
     val parsed = summon[llm.utils.IsToolArg[WeatherArgs]].parse(toolUse.input)
     assert(parsed.isRight, s"Failed to parse tool args: $parsed")
@@ -551,9 +709,15 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val messages = List(
       Message.user("What is the weather in Paris?"),
       response1.message,
-      Message.toolResult(toolUse.id, """{"temperature": 22, "condition": "sunny"}"""),
+      Message.toolResult(
+        toolUse.id,
+        """{"temperature": 22, "condition": "sunny"}"""
+      )
     )
-    val noToolConfig = config.copy(tools = Nil, systemPrompt = Some("Answer based on the tool result."))
+    val noToolConfig = config.copy(
+      tools = Nil,
+      systemPrompt = Some("Answer based on the tool result.")
+    )
     val result2 = endpoint.invoke(messages, noToolConfig)
     assert(result2.isRight, s"Step 3 failed: $result2")
     assert(result2.toOption.get.message.text.nonEmpty)
@@ -564,20 +728,28 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(256),
-      tools = List(weatherTool),
+      tools = List(weatherTool)
     )
-    val result1 = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result1 = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result1.isRight, s"Step 1 failed: $result1")
     val response1 = result1.toOption.get
     assert(response1.finishReason == FinishReason.ToolUse)
-    val toolUse = response1.message.content.collectFirst { case c: Content.ToolUse => c }.get
+    val toolUse = response1.message.content.collectFirst {
+      case c: Content.ToolUse => c
+    }.get
     val parsed = summon[llm.utils.IsToolArg[WeatherArgs]].parse(toolUse.input)
     assert(parsed.isRight, s"Failed to parse tool args: $parsed")
     assert(parsed.toOption.get.location.contains("Paris"))
     val messages = List(
       Message.user("What is the weather in Paris?"),
       response1.message,
-      Message.toolResult(toolUse.id, """{"temperature": 22, "condition": "sunny"}"""),
+      Message.toolResult(
+        toolUse.id,
+        """{"temperature": 22, "condition": "sunny"}"""
+      )
     )
     val noToolConfig = config.copy(tools = Nil)
     val result2 = endpoint.invoke(messages, noToolConfig)
@@ -590,26 +762,33 @@ class EndpointNetworkSuite extends munit.FunSuite:
     val config = LLMConfig(
       model = "gpt-5.4-mini",
       maxTokens = Some(256),
-      tools = List(weatherTool),
+      tools = List(weatherTool)
     )
-    val result1 = endpoint.invoke(List(Message.user("What is the weather in Paris?")), config)
+    val result1 = endpoint.invoke(
+      List(Message.user("What is the weather in Paris?")),
+      config
+    )
     assert(result1.isRight, s"Step 1 failed: $result1")
     val response1 = result1.toOption.get
     assert(response1.finishReason == FinishReason.ToolUse)
-    val toolUse = response1.message.content.collectFirst { case c: Content.ToolUse => c }.get
+    val toolUse = response1.message.content.collectFirst {
+      case c: Content.ToolUse => c
+    }.get
     val parsed = summon[llm.utils.IsToolArg[WeatherArgs]].parse(toolUse.input)
     assert(parsed.isRight, s"Failed to parse tool args: $parsed")
     assert(parsed.toOption.get.location.contains("Paris"))
     val messages = List(
       Message.user("What is the weather in Paris?"),
       response1.message,
-      Message.toolResult(toolUse.id, """{"temperature": 22, "condition": "sunny"}"""),
+      Message.toolResult(
+        toolUse.id,
+        """{"temperature": 22, "condition": "sunny"}"""
+      )
     )
     val noToolConfig = config.copy(tools = Nil)
     val result2 = endpoint.invoke(messages, noToolConfig)
     assert(result2.isRight, s"Step 3 failed: $result2")
     assert(result2.toOption.get.message.text.nonEmpty)
-
 
 /*
   // OllamaEndpoint tests
@@ -650,4 +829,4 @@ class EndpointNetworkSuite extends munit.FunSuite:
       assert(done.isDefined, "Expected Done event")
       val text = deltas.mkString
    assert(text.nonEmpty)
-*/
+ */

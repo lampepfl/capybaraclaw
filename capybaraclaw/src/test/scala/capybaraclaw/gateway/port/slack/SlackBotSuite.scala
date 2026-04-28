@@ -11,7 +11,7 @@ class SlackBotSuite extends munit.FunSuite:
 
   private lazy val botToken = env("SLACK_BOT_TOKEN")
   private lazy val appToken = env("SLACK_APP_TOKEN")
-  private lazy val channel  = env("SLACK_TEST_CHANNEL")
+  private lazy val channel = env("SLACK_TEST_CHANNEL")
 
   test("sendMessage posts to channel and returns timestamp".tag(Network)):
     val bot = SlackBot(botToken, appToken)
@@ -28,7 +28,10 @@ class SlackBotSuite extends munit.FunSuite:
       Thread.sleep(1000)
       val messages = bot.readHistory(channel, limit = 5)
       assert(messages.nonEmpty, "Expected at least one message")
-      assert(messages.exists(_.text == marker), s"Marker message not found in history: $messages")
+      assert(
+        messages.exists(_.text == marker),
+        s"Marker message not found in history: $messages"
+      )
     finally bot.shutdown()
 
   test("messageChannel receives messages".tag(Network)):

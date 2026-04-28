@@ -36,7 +36,8 @@ class JsonlContextProvider(baseDir: File) extends ContextProvider:
 
   def append(key: ContextKey, msg: Message): Unit =
     encode(msg) match
-      case None => () // not persistable (tool-use, tool-result, thinking-only, etc.)
+      case None =>
+        () // not persistable (tool-use, tool-result, thinking-only, etc.)
       case Some(line) =>
         val f = fileFor(key)
         val parent = f.getParentFile
@@ -63,11 +64,10 @@ class JsonlContextProvider(baseDir: File) extends ContextProvider:
     val roleStr = m.role match
       case Role.User      => "user"
       case Role.Assistant => "assistant"
-      case Role.System    => return None // system seed comes from the agent config
+      case Role.System => return None // system seed comes from the agent config
     val text = m.content.collect { case Content.Text(t) => t }.mkString
     if text.isEmpty then None
-    else
-      Some(ujson.write(ujson.Obj("role" -> roleStr, "text" -> text)))
+    else Some(ujson.write(ujson.Obj("role" -> roleStr, "text" -> text)))
 
   private def decode(line: String): Option[Message] =
     if line.trim.isEmpty then return None

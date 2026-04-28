@@ -41,8 +41,10 @@ class SlackPort(bot: SlackBot) extends Port:
     bot.sendMessage(channelId, text, threadTs)
 
   def shutdown(): Unit =
-    try outCh.close() catch case _: Throwable => ()
-    try bot.shutdown() catch case _: Throwable => ()
+    try outCh.close()
+    catch case _: Throwable => ()
+    try bot.shutdown()
+    catch case _: Throwable => ()
 
   private def toOrigin(msg: Message): Origin =
     val thread = msg.threadTs match

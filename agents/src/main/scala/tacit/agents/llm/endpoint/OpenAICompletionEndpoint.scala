@@ -4,11 +4,19 @@ package llm.endpoint
 import com.openai.client.OpenAIClient
 import com.openai.client.okhttp.OpenAIOkHttpClient
 import com.openai.models.chat.completions.{
-  ChatCompletion, ChatCompletionCreateParams, ChatCompletionToolMessageParam,
-  ChatCompletionAssistantMessageParam, ChatCompletionMessageFunctionToolCall,
-  ChatCompletionChunk, ChatCompletionStreamOptions,
+  ChatCompletion,
+  ChatCompletionCreateParams,
+  ChatCompletionToolMessageParam,
+  ChatCompletionAssistantMessageParam,
+  ChatCompletionMessageFunctionToolCall,
+  ChatCompletionChunk,
+  ChatCompletionStreamOptions
 }
-import com.openai.models.{FunctionDefinition, FunctionParameters, ReasoningEffort}
+import com.openai.models.{
+  FunctionDefinition,
+  FunctionParameters,
+  ReasoningEffort
+}
 import com.openai.core.JsonValue
 import scala.jdk.CollectionConverters.*
 import gears.async.{Async, Future, UnboundedChannel, ReadableChannel}
@@ -22,13 +30,18 @@ import tacit.agents.utils.Result
 class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
 
   private lazy val client: OpenAIClient =
-    OpenAIOkHttpClient.builder()
+    OpenAIOkHttpClient
+      .builder()
       .apiKey(config.apiKey)
       .baseUrl(config.baseUrl)
       .build()
 
-  private def buildParams(messages: List[Message], llmConfig: LLMConfig): ChatCompletionCreateParams.Builder =
-    val builder = ChatCompletionCreateParams.builder()
+  private def buildParams(
+      messages: List[Message],
+      llmConfig: LLMConfig
+  ): ChatCompletionCreateParams.Builder =
+    val builder = ChatCompletionCreateParams
+      .builder()
       .model(llmConfig.model)
 
     llmConfig.systemPrompt.foreach(p => builder.addSystemMessage(p))
@@ -38,30 +51,33 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
         case Role.System =>
           builder.addSystemMessage(msg.text)
         case Role.User =>
-          val toolResults = msg.content.collect { case tr: Content.ToolResult => tr }
+          val toolResults = msg.content.collect { case tr: Content.ToolResult =>
+            tr
+          }
           if toolResults.nonEmpty then
             toolResults.foreach: tr =>
               builder.addMessage(
-                ChatCompletionToolMessageParam.builder()
+                ChatCompletionToolMessageParam
+                  .builder()
                   .toolCallId(tr.toolUseId)
                   .content(tr.content)
                   .build()
               )
-          else
-            builder.addUserMessage(msg.text)
+          else builder.addUserMessage(msg.text)
         case Role.Assistant =>
           val toolUses = msg.content.collect { case tu: Content.ToolUse => tu }
           if toolUses.nonEmpty then
             val assistantBuilder = ChatCompletionAssistantMessageParam.builder()
             val textContent = msg.text
-            if textContent.nonEmpty then
-              assistantBuilder.content(textContent)
+            if textContent.nonEmpty then assistantBuilder.content(textContent)
             toolUses.foreach: tu =>
               assistantBuilder.addToolCall(
-                ChatCompletionMessageFunctionToolCall.builder()
+                ChatCompletionMessageFunctionToolCall
+                  .builder()
                   .id(tu.id)
                   .function(
-                    ChatCompletionMessageFunctionToolCall.Function.builder()
+                    ChatCompletionMessageFunctionToolCall.Function
+                      .builder()
                       .name(tu.name)
                       .arguments(tu.input)
                       .build()
@@ -69,8 +85,7 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
                   .build()
               )
             builder.addMessage(assistantBuilder.build())
-          else
-            builder.addAssistantMessage(msg.text)
+          else builder.addAssistantMessage(msg.text)
 
     llmConfig.temperature.foreach(t => builder.temperature(t))
     llmConfig.maxTokens.foreach(n => builder.maxCompletionTokens(n.toLong))
@@ -85,7 +100,8 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
     if llmConfig.tools.nonEmpty then
       llmConfig.tools.foreach: tool =>
         builder.addFunctionTool(
-          FunctionDefinition.builder()
+          FunctionDefinition
+            .builder()
             .name(tool.name)
             .description(tool.description)
             .parameters(convertParameters(tool.parameters))
@@ -93,39 +109,59 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
         )
 
     llmConfig.thinking.foreach:
-      case ThinkingMode.Disabled => builder.reasoningEffort(ReasoningEffort.NONE)
+      case ThinkingMode.Disabled =>
+        builder.reasoningEffort(ReasoningEffort.NONE)
       case ThinkingMode.Auto => builder.reasoningEffort(ReasoningEffort.MEDIUM)
-      case ThinkingMode.Effort(EffortLevel.Low) => builder.reasoningEffort(ReasoningEffort.LOW)
-      case ThinkingMode.Effort(EffortLevel.Medium) => builder.reasoningEffort(ReasoningEffort.MEDIUM)
-      case ThinkingMode.Effort(EffortLevel.High) => builder.reasoningEffort(ReasoningEffort.HIGH)
-      case ThinkingMode.Effort(EffortLevel.XHigh) => builder.reasoningEffort(ReasoningEffort.XHIGH)
+      case ThinkingMode.Effort(EffortLevel.Low) =>
+        builder.reasoningEffort(ReasoningEffort.LOW)
+      case ThinkingMode.Effort(EffortLevel.Medium) =>
+        builder.reasoningEffort(ReasoningEffort.MEDIUM)
+      case ThinkingMode.Effort(EffortLevel.High) =>
+        builder.reasoningEffort(ReasoningEffort.HIGH)
+      case ThinkingMode.Effort(EffortLevel.XHigh) =>
+        builder.reasoningEffort(ReasoningEffort.XHIGH)
       case ThinkingMode.Budget(n) =>
-        throw IllegalArgumentException(s"Budget($n) is not valid for OpenAI. Use ThinkingMode.Effort instead.")
+        throw IllegalArgumentException(
+          s"Budget($n) is not valid for OpenAI. Use ThinkingMode.Effort instead."
+        )
 
     builder
 
-  override def invoke(messages: List[Message], llmConfig: LLMConfig): Result[ChatResponse, LLMError] =
+  override def invoke(
+      messages: List[Message],
+      llmConfig: LLMConfig
+  ): Result[ChatResponse, LLMError] =
     try
-      val completion = client.chat().completions().create(buildParams(messages, llmConfig).build())
+      val completion = client
+        .chat()
+        .completions()
+        .create(buildParams(messages, llmConfig).build())
       val choice = completion.choices().get(0)
       Right(convertResponse(choice, completion))
     catch
       case e: Exception =>
         Left(LLMError(s"OpenAI API error: ${e.getMessage}"))
 
-  override def stream(messages: List[Message], llmConfig: LLMConfig)(using Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
+  override def stream(messages: List[Message], llmConfig: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
     val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
     Future:
       try
         val params = buildParams(messages, llmConfig)
-          .streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
+          .streamOptions(
+            ChatCompletionStreamOptions.builder().includeUsage(true).build()
+          )
           .build()
         val streamResponse = client.chat().completions().createStreaming(params)
         val iterator = streamResponse.stream().iterator().asScala
 
         // Accumulators for building the final ChatResponse
         val textBuf = new StringBuilder
-        val toolCalls = scala.collection.mutable.Map[Int, (String, String, StringBuilder)]() // index -> (id, name, args)
+        val toolCalls = scala.collection.mutable.Map[
+          Int,
+          (String, String, StringBuilder)
+        ]() // index -> (id, name, args)
         var lastFinishReason: FinishReason = FinishReason.Stop
         var lastUsage: Option[Usage] = None
 
@@ -137,24 +173,38 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
             val delta = choice.delta()
 
             // Text delta
-            delta.content().ifPresent: text =>
-              if text.nn.nonEmpty then
-                textBuf.append(text.nn)
-                ch.send(Right(StreamEvent.Delta(text.nn)))
+            delta
+              .content()
+              .ifPresent: text =>
+                if text.nn.nonEmpty then
+                  textBuf.append(text.nn)
+                  ch.send(Right(StreamEvent.Delta(text.nn)))
 
             // Tool call deltas
-            delta.toolCalls().ifPresent: tcs =>
-              tcs.forEach: tc =>
-                val idx = tc.index().toInt
-                tc.id().ifPresent: id =>
-                  val name = tc.function().flatMap(f => f.name()).orElse("").nn
-                  toolCalls(idx) = (id.nn, name, new StringBuilder)
-                  ch.send(Right(StreamEvent.ToolCallStart(idx, id.nn, name)))
-                tc.function().ifPresent: fn =>
-                  fn.arguments().ifPresent: args =>
-                    toolCalls.get(idx).foreach: (_, _, buf) =>
-                      buf.append(args.nn)
-                    ch.send(Right(StreamEvent.ToolCallDelta(idx, args.nn)))
+            delta
+              .toolCalls()
+              .ifPresent: tcs =>
+                tcs.forEach: tc =>
+                  val idx = tc.index().toInt
+                  tc.id()
+                    .ifPresent: id =>
+                      val name =
+                        tc.function().flatMap(f => f.name()).orElse("").nn
+                      toolCalls(idx) = (id.nn, name, new StringBuilder)
+                      ch.send(
+                        Right(StreamEvent.ToolCallStart(idx, id.nn, name))
+                      )
+                  tc.function()
+                    .ifPresent: fn =>
+                      fn.arguments()
+                        .ifPresent: args =>
+                          toolCalls
+                            .get(idx)
+                            .foreach: (_, _, buf) =>
+                              buf.append(args.nn)
+                          ch.send(
+                            Right(StreamEvent.ToolCallDelta(idx, args.nn))
+                          )
 
             // Finish reason
             if choice.finishReason().isPresent then
@@ -165,23 +215,28 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
                 case other        => FinishReason.Other(other)
 
           // Usage (appears in final chunk)
-          chunk.usage().ifPresent: u =>
-            lastUsage = Some(Usage(
-              inputTokens = u.promptTokens(),
-              outputTokens = u.completionTokens(),
-            ))
+          chunk
+            .usage()
+            .ifPresent: u =>
+              lastUsage = Some(
+                Usage(
+                  inputTokens = u.promptTokens(),
+                  outputTokens = u.completionTokens()
+                )
+              )
 
         streamResponse.close()
         // Build final ChatResponse
         val contents = scala.collection.mutable.ListBuffer[Content]()
-        if textBuf.nonEmpty then
-          contents += Content.Text(textBuf.toString)
-        toolCalls.toList.sortBy(_._1).foreach: (_, tuple) =>
-          contents += Content.ToolUse(tuple._1, tuple._2, tuple._3.toString)
+        if textBuf.nonEmpty then contents += Content.Text(textBuf.toString)
+        toolCalls.toList
+          .sortBy(_._1)
+          .foreach: (_, tuple) =>
+            contents += Content.ToolUse(tuple._1, tuple._2, tuple._3.toString)
         val response = ChatResponse(
           message = Message(Role.Assistant, contents.toList),
           finishReason = lastFinishReason,
-          usage = lastUsage,
+          usage = lastUsage
         )
         ch.send(Right(StreamEvent.Done(response)))
       catch
@@ -190,23 +245,26 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
     ch.asReadable
 
   private def convertResponse(
-    choice: ChatCompletion.Choice,
-    completion: ChatCompletion,
+      choice: ChatCompletion.Choice,
+      completion: ChatCompletion
   ): ChatResponse =
     val assistantMsg = choice.message()
     val contents = scala.collection.mutable.ListBuffer[Content]()
 
     val textContent = assistantMsg.content().orElse("").nn
-    if textContent.nonEmpty then
-      contents += Content.Text(textContent)
+    if textContent.nonEmpty then contents += Content.Text(textContent)
 
-    assistantMsg.toolCalls().orElse(java.util.List.of()).nn.forEach: tc =>
-      val func = tc.function().get().nn
-      contents += Content.ToolUse(
-        id = func.id(),
-        name = func.function().name(),
-        input = func.function().arguments(),
-      )
+    assistantMsg
+      .toolCalls()
+      .orElse(java.util.List.of())
+      .nn
+      .forEach: tc =>
+        val func = tc.function().get().nn
+        contents += Content.ToolUse(
+          id = func.id(),
+          name = func.function().name(),
+          input = func.function().arguments()
+        )
 
     val finishReason = choice.finishReason().toString match
       case "stop"       => FinishReason.Stop
@@ -217,19 +275,23 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
     val usage =
       if completion.usage().isPresent then
         val u = completion.usage().get().nn
-        Some(Usage(
-          inputTokens = u.promptTokens(),
-          outputTokens = u.completionTokens(),
-        ))
+        Some(
+          Usage(
+            inputTokens = u.promptTokens(),
+            outputTokens = u.completionTokens()
+          )
+        )
       else None
 
     ChatResponse(
       message = Message(Role.Assistant, contents.toList),
       finishReason = finishReason,
-      usage = usage,
+      usage = usage
     )
 
-  private def convertParameters(params: ToolSchema.Parameters): FunctionParameters =
+  private def convertParameters(
+      params: ToolSchema.Parameters
+  ): FunctionParameters =
     val propsMap = new java.util.LinkedHashMap[String, Any]()
     params.properties.foreach: (name, prop) =>
       val propMap = new java.util.LinkedHashMap[String, Any]()
@@ -244,10 +306,14 @@ class OpenAICompletionEndpoint(config: EndpointConfig) extends Endpoint:
         propMap.put("items", itemMap)
       propsMap.put(name, propMap)
 
-    FunctionParameters.builder()
+    FunctionParameters
+      .builder()
       .putAdditionalProperty("type", JsonValue.from("object"))
       .putAdditionalProperty("properties", JsonValue.from(propsMap))
-      .putAdditionalProperty("required", JsonValue.from(java.util.List.of(params.required*)))
+      .putAdditionalProperty(
+        "required",
+        JsonValue.from(java.util.List.of(params.required*))
+      )
       .build()
 
 object OpenAICompletionEndpoint extends EndpointProvider:
@@ -257,7 +323,10 @@ object OpenAICompletionEndpoint extends EndpointProvider:
     OpenAICompletionEndpoint(config)
 
   override def createFromEnv(): OpenAICompletionEndpoint =
-    val apiKey = sys.env.getOrElse("OPENAI_API_KEY",
-      throw RuntimeException("OPENAI_API_KEY environment variable is not set"))
-    val baseUrl = sys.env.getOrElse("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    val apiKey = sys.env.getOrElse(
+      "OPENAI_API_KEY",
+      throw RuntimeException("OPENAI_API_KEY environment variable is not set")
+    )
+    val baseUrl =
+      sys.env.getOrElse("OPENAI_BASE_URL", "https://api.openai.com/v1")
     create(EndpointConfig(baseUrl = baseUrl, apiKey = apiKey))

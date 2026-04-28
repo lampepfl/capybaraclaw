@@ -6,7 +6,11 @@ import gears.async.ReadableChannel
 class SlackBot(botToken: String, appToken: String):
   val client: SlackClient = SlackClient(botToken, appToken)
 
-  def sendMessage(channel: String, text: String, threadTs: Option[String] = None): String =
+  def sendMessage(
+      channel: String,
+      text: String,
+      threadTs: Option[String] = None
+  ): String =
     client.sendMessage(channel, text, threadTs)
 
   def readHistory(channel: String, limit: Int = 32): List[Message] =
@@ -20,10 +24,14 @@ class SlackBot(botToken: String, appToken: String):
 
 object SlackBot:
   def fromEnv(): SlackBot =
-    val botToken = sys.env.getOrElse("SLACK_BOT_TOKEN",
-      throw RuntimeException("SLACK_BOT_TOKEN not set"))
-    val appToken = sys.env.getOrElse("SLACK_APP_TOKEN",
-      throw RuntimeException("SLACK_APP_TOKEN not set"))
+    val botToken = sys.env.getOrElse(
+      "SLACK_BOT_TOKEN",
+      throw RuntimeException("SLACK_BOT_TOKEN not set")
+    )
+    val appToken = sys.env.getOrElse(
+      "SLACK_APP_TOKEN",
+      throw RuntimeException("SLACK_APP_TOKEN not set")
+    )
     SlackBot(botToken, appToken)
 
   def usingBot[R](block: SlackBot^ => R): R =
