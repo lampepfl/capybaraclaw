@@ -123,7 +123,7 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
           Reasoning
             .builder()
             .effort(ReasoningEffort.MEDIUM)
-            .generateSummary(Reasoning.GenerateSummary.AUTO)
+            .summary(Reasoning.Summary.AUTO)
             .build()
         )
       case ThinkingMode.Effort(level) =>
@@ -136,7 +136,7 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
           Reasoning
             .builder()
             .effort(effort)
-            .generateSummary(Reasoning.GenerateSummary.AUTO)
+            .summary(Reasoning.Summary.AUTO)
             .build()
         )
       case ThinkingMode.Budget(n) =>
