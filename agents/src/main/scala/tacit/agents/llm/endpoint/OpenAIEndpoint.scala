@@ -97,7 +97,7 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
       case ThinkingMode.Auto =>
         builder.reasoning(Reasoning.builder()
           .effort(ReasoningEffort.MEDIUM)
-          .generateSummary(Reasoning.GenerateSummary.AUTO)
+          .summary(Reasoning.Summary.AUTO)
           .build())
       case ThinkingMode.Effort(level) =>
         val effort = level match
@@ -107,7 +107,7 @@ class OpenAIEndpoint(config: EndpointConfig) extends Endpoint:
           case EffortLevel.XHigh => ReasoningEffort.XHIGH
         builder.reasoning(Reasoning.builder()
           .effort(effort)
-          .generateSummary(Reasoning.GenerateSummary.AUTO)
+          .summary(Reasoning.Summary.AUTO)
           .build())
       case ThinkingMode.Budget(n) =>
         throw IllegalArgumentException(s"Budget($n) is not valid for OpenAI. Use ThinkingMode.Effort instead.")

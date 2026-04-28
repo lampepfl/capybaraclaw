@@ -86,7 +86,8 @@ lazy val capybaraclaw = project
       "com.slack.api" % "bolt-socket-mode" % "1.48.0",
       "org.glassfish.tyrus.bundles" % "tyrus-standalone-client" % "1.21",
       "lampepfl" %% "tacit" % tacitVersion,
-      "lampepfl" %% "tacit-library" % tacitLibraryVersion intransitive(),
+      ("lampepfl" %% "tacit-library" % tacitLibraryVersion)
+        .excludeAll(ExclusionRule(organization = "*", name = "*")),
       "org.scalameta" %% "munit" % "1.2.2" % Test,
     ),
     testFrameworks += MUnitFramework,
