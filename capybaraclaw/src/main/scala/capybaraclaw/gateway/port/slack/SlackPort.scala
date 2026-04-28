@@ -3,6 +3,7 @@ package capybaraclaw.gateway.port.slack
 import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
+import org.slf4j.LoggerFactory
 
 /** Gateway Port backed by Slack Socket Mode.
   *
@@ -16,6 +17,7 @@ import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 class SlackPort(bot: SlackBot) extends Port:
   val id: String = SlackPort.Id
 
+  private val logger = LoggerFactory.getLogger(classOf[SlackPort])
   private val outCh = UnboundedChannel[GatewayMessage]()
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
@@ -58,10 +60,22 @@ class SlackPort(bot: SlackBot) extends Port:
       case i  => (thread.substring(0, i), Some(thread.substring(i + 1)))
 
   private def logIn(origin: Origin, text: String): Unit =
-    println(s"[slack <-] (${origin.thread}) ${origin.user}: ${snippet(text)}")
+    logger.info(
+      "[slack <-] ({}) {} ({} chars)",
+      origin.thread,
+      origin.user,
+      text.length
+    )
+    logger.debug(
+      "[slack <-] ({}) {}: {}",
+      origin.thread,
+      origin.user,
+      snippet(text)
+    )
 
   private def logOut(key: ContextKey, text: String): Unit =
-    println(s"[slack ->] (${key.thread}) ${snippet(text)}")
+    logger.info("[slack ->] ({}) ({} chars)", key.thread, text.length)
+    logger.debug("[slack ->] ({}) {}", key.thread, snippet(text))
 
   private def snippet(text: String, max: Int = 200): String =
     val oneLine = text.replace('\n', ' ').replace('\r', ' ')

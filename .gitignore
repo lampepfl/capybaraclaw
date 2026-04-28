@@ -48,3 +48,9 @@ hs_err_pid*
 # Env files
 .envrc
 .env
+
+# Capybara local runtime data
+.claw/
+
+# Cellar
+.cellar/

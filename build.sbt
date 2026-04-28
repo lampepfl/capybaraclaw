@@ -21,21 +21,14 @@ val tacitVersion = "0.1.4-SNAPSHOT"
 val tacitLibraryVersion = "0.1.4-SNAPSHOT"
 
 lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
-  val (flags, positional) = args.partition(_.startsWith("--"))
-  val rawPath = positional match {
-    case Seq()  => "."
-    case Seq(p) => p
-    case _      => sys.error(s"claw takes at most one path argument, got: ${positional.mkString(", ")}")
+  val quotedArgs = args.map { arg =>
+    val escaped = arg.replace("\\", "\\\\").replace("\"", "\\\"")
+    s""""$escaped""""
   }
-  val absPath = new java.io.File(rawPath).getCanonicalPath
-  val escaped = absPath.replace("\\", "\\\\").replace("\"", "\\\"")
   val runCommand =
-    if (flags.isEmpty) "capybaraclaw/run"
-    else s"capybaraclaw/run ${flags.mkString(" ")}"
-  List(
-    s"""set capybaraclaw / run / baseDirectory := file("$escaped")""",
-    runCommand,
-  ) ::: state
+    if (quotedArgs.isEmpty) "capybaraclaw/run"
+    else s"capybaraclaw/run ${quotedArgs.mkString(" ")}"
+  runCommand :: state
 }
 
 addCommandAlias("simple-agent", "agents/runMain tacit.agents.simpleAgentRepl")
@@ -84,7 +77,12 @@ lazy val capybaraclaw = project
     libraryDependencies ++= Seq(
       "com.slack.api" % "bolt" % "1.48.0",
       "com.slack.api" % "bolt-socket-mode" % "1.48.0",
+      "ch.qos.logback" % "logback-classic" % "1.5.16",
       "org.glassfish.tyrus.bundles" % "tyrus-standalone-client" % "1.21",
+      "org.jline" % "jline-reader" % "3.29.0",
+      "org.jline" % "jline-terminal-jni" % "3.29.0",
+      "xyz.matthieucourt" %% "layoutz" % "0.7.0",
+      "com.github.alexarchambault" %% "case-app" % "2.1.0",
       "lampepfl" %% "tacit" % tacitVersion,
       ("lampepfl" %% "tacit-library" % tacitLibraryVersion)
         .excludeAll(ExclusionRule(organization = "*", name = "*")),
@@ -95,6 +93,7 @@ lazy val capybaraclaw = project
     inConfig(TestFull)(Defaults.testTasks),
     TestFull / testOptions := Seq.empty,
     fork := true,
+    run / fork := false,
     run / connectInput := true,
     Compile / mainClass := Some("capybaraclaw.main"),
     javaOptions += {
