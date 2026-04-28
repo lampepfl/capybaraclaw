@@ -9,6 +9,8 @@ import tacit.agents.llm.utils.IsToolArg
 import tacit.agents.utils.Result
 import io.circe.Json
 import io.circe.syntax.*
+import tacit.library.Interface as TacitLibraryInterface
+import scala.util.Try
 
 case class EvalScalaArgs(code: String) derives IsToolArg
 
@@ -22,6 +24,7 @@ class ClawAgent(
 
   private val tacitContext: TacitContext = TacitContext(
     TacitConfig(
+      libraryJarPath = resolveTacitLibraryJarPath(),
       libraryConfig = Json.obj(
         "classifiedPaths" -> agentConfig.classifiedPaths
           .map(p => java.io.File(workDir, p).getCanonicalPath)
@@ -88,3 +91,22 @@ class ClawAgent(
     if agentConfig.classifiedPaths.nonEmpty then
       println(s"  classify : ${agentConfig.classifiedPaths.mkString(", ")}")
     println()
+
+  private def resolveTacitLibraryJarPath(): String =
+    val fromProperty =
+      Option(System.getProperty("tacit.library.jar")).filter(_.nonEmpty)
+    val fromCodeSource =
+      Try:
+        val url = classOf[
+          TacitLibraryInterface
+        ].getProtectionDomain.getCodeSource.getLocation
+        java.io.File(url.toURI).getAbsolutePath
+      .toOption
+        .filter(_.nonEmpty)
+
+    fromProperty
+      .orElse(fromCodeSource)
+      .getOrElse:
+        throw RuntimeException(
+          "Unable to resolve tacit-library path. Set -Dtacit.library.jar or ensure tacit-library is on classpath."
+        )
