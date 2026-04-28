@@ -4,17 +4,20 @@ package llm.endpoint
 class EndpointSuite extends munit.FunSuite:
 
   test("OpenAIEndpoint.create with explicit config"):
-    val config = EndpointConfig(baseUrl = "https://api.openai.com/v1", apiKey = "test-key")
+    val config =
+      EndpointConfig(baseUrl = "https://api.openai.com/v1", apiKey = "test-key")
     val endpoint = OpenAIEndpoint.create(config)
     assert(endpoint.isInstanceOf[OpenAIEndpoint])
 
   test("OpenAICompletionEndpoint.create with explicit config"):
-    val config = EndpointConfig(baseUrl = "https://api.openai.com/v1", apiKey = "test-key")
+    val config =
+      EndpointConfig(baseUrl = "https://api.openai.com/v1", apiKey = "test-key")
     val endpoint = OpenAICompletionEndpoint.create(config)
     assert(endpoint.isInstanceOf[OpenAICompletionEndpoint])
 
   test("AnthropicEndpoint.create with explicit config"):
-    val config = EndpointConfig(baseUrl = "https://api.anthropic.com", apiKey = "test-key")
+    val config =
+      EndpointConfig(baseUrl = "https://api.anthropic.com", apiKey = "test-key")
     val endpoint = AnthropicEndpoint.create(config)
     assert(endpoint.isInstanceOf[AnthropicEndpoint])
 
@@ -46,7 +49,8 @@ class EndpointSuite extends munit.FunSuite:
       case other => fail(s"Expected ToolResult but got $other")
 
   test("Message.toolResult with isError flag"):
-    val msg = Message.toolResult("call-456", "something went wrong", isError = true)
+    val msg =
+      Message.toolResult("call-456", "something went wrong", isError = true)
     msg.content.head match
       case Content.ToolResult(_, _, isError) => assert(isError)
       case other => fail(s"Expected ToolResult but got $other")
@@ -54,20 +58,26 @@ class EndpointSuite extends munit.FunSuite:
   // Message accessor tests
 
   test("Message.text extracts and concatenates Text content"):
-    val msg = Message(Role.Assistant, List(
-      Content.Thinking("let me think"),
-      Content.Text("hello "),
-      Content.ToolUse("id", "fn", "{}"),
-      Content.Text("world"),
-    ))
+    val msg = Message(
+      Role.Assistant,
+      List(
+        Content.Thinking("let me think"),
+        Content.Text("hello "),
+        Content.ToolUse("id", "fn", "{}"),
+        Content.Text("world")
+      )
+    )
     assert(msg.text == "hello world")
 
   test("Message.thinking extracts and concatenates Thinking content"):
-    val msg = Message(Role.Assistant, List(
-      Content.Thinking("step 1, "),
-      Content.Text("answer"),
-      Content.Thinking("step 2"),
-    ))
+    val msg = Message(
+      Role.Assistant,
+      List(
+        Content.Thinking("step 1, "),
+        Content.Text("answer"),
+        Content.Thinking("step 2")
+      )
+    )
     assert(msg.thinking == "step 1, step 2")
 
   test("Message.text returns empty string when no Text content"):
@@ -93,33 +103,41 @@ class EndpointSuite extends munit.FunSuite:
   // ThinkingMode error case tests
 
   test("OpenAIEndpoint.invoke with ThinkingMode.Budget returns error"):
-    val endpoint = OpenAIEndpoint.create(EndpointConfig("https://api.openai.com/v1", "dummy"))
+    val endpoint = OpenAIEndpoint.create(
+      EndpointConfig("https://api.openai.com/v1", "dummy")
+    )
     val config = LLMConfig(
       model = "o4-mini",
       maxTokens = Some(16),
-      thinking = Some(ThinkingMode.Budget(1024)),
+      thinking = Some(ThinkingMode.Budget(1024))
     )
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)
     assert(result.left.toOption.get.description.contains("Budget"))
 
-  test("OpenAICompletionEndpoint.invoke with ThinkingMode.Budget returns error"):
-    val endpoint = OpenAICompletionEndpoint.create(EndpointConfig("https://api.openai.com/v1", "dummy"))
+  test(
+    "OpenAICompletionEndpoint.invoke with ThinkingMode.Budget returns error"
+  ):
+    val endpoint = OpenAICompletionEndpoint.create(
+      EndpointConfig("https://api.openai.com/v1", "dummy")
+    )
     val config = LLMConfig(
       model = "o4-mini",
       maxTokens = Some(16),
-      thinking = Some(ThinkingMode.Budget(1024)),
+      thinking = Some(ThinkingMode.Budget(1024))
     )
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)
     assert(result.left.toOption.get.description.contains("Budget"))
 
   test("AnthropicEndpoint.invoke with ThinkingMode.Effort returns error"):
-    val endpoint = AnthropicEndpoint.create(EndpointConfig("https://api.anthropic.com", "dummy"))
+    val endpoint = AnthropicEndpoint.create(
+      EndpointConfig("https://api.anthropic.com", "dummy")
+    )
     val config = LLMConfig(
       model = "claude-haiku-4-5",
       maxTokens = Some(16),
-      thinking = Some(ThinkingMode.Effort(EffortLevel.Low)),
+      thinking = Some(ThinkingMode.Effort(EffortLevel.Low))
     )
     val result = endpoint.invoke(List(Message.user("hello")), config)
     assert(result.isLeft)

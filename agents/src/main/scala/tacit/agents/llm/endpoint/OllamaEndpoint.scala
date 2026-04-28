@@ -15,5 +15,6 @@ object OllamaEndpoint extends EndpointProvider:
 
   override def createFromEnv(): OpenAIEndpoint =
     val apiKey = sys.env.getOrElse("OLLAMA_API_KEY", "ollama")
-    val baseUrl = sys.env.getOrElse("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    val baseUrl =
+      sys.env.getOrElse("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     create(EndpointConfig(baseUrl = baseUrl, apiKey = apiKey))

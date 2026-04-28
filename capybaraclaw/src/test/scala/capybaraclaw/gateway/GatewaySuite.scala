@@ -13,10 +13,14 @@ import tacit.agents.llm.endpoint.{
   ChatResponse,
   FinishReason,
   Role,
-  StreamEvent,
+  StreamEvent
 }
 import tacit.agents.utils.Result
-import java.util.concurrent.{ConcurrentLinkedQueue, LinkedBlockingQueue, TimeUnit}
+import java.util.concurrent.{
+  ConcurrentLinkedQueue,
+  LinkedBlockingQueue,
+  TimeUnit
+}
 import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters.*
 
@@ -27,7 +31,7 @@ object FakePort:
   def defaultReplyTimeoutMs: Long =
     sys.env.get("CAPYBARACLAW_CI") match
       case Some(v) if v == "1" || v.equalsIgnoreCase("true") => 60_000L
-      case _ => 5_000L
+      case _                                                 => 5_000L
 
 /** Scripted LLM endpoint: on each `stream` call returns the next response from the
   * list as a single `StreamEvent.Done`. If responses are exhausted, returns an error.
@@ -35,18 +39,22 @@ object FakePort:
 class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
   private var idx = 0
 
-  def invoke(messages: List[Message], config: LLMConfig): Result[ChatResponse, LLMError] =
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] =
     if idx < responses.length then
       val r = responses(idx); idx += 1; Right(r)
     else Left(LLMError("No more stub responses"))
 
-  def stream(messages: List[Message], config: LLMConfig)(using Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
     val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
     if idx < responses.length then
       val r = responses(idx); idx += 1
       ch.sendImmediately(Right(StreamEvent.Done(r)))
-    else
-      ch.sendImmediately(Left(LLMError("No more stub responses")))
+    else ch.sendImmediately(Left(LLMError("No more stub responses")))
     ch.asReadable
 
 /** In-memory Port that lets tests push inbound messages and capture outbound replies. */
@@ -60,21 +68,26 @@ class FakePort(override val id: String) extends Port:
     sentReplies.put((key, text))
 
   def shutdown(): Unit =
-    try inCh.close() catch case _: Throwable => ()
+    try inCh.close()
+    catch case _: Throwable => ()
 
   def push(msg: GatewayMessage): Unit =
     inCh.sendImmediately(msg)
 
-  def nextReply(timeoutMs: Long = FakePort.defaultReplyTimeoutMs): (ContextKey, String) =
+  def nextReply(
+      timeoutMs: Long = FakePort.defaultReplyTimeoutMs
+  ): (ContextKey, String) =
     val got = sentReplies.poll(timeoutMs, TimeUnit.MILLISECONDS)
-    if got == null then throw new AssertionError(s"No reply within ${timeoutMs}ms")
+    if got == null then
+      throw new AssertionError(s"No reply within ${timeoutMs}ms")
     got
 
 /** In-memory `ContextProvider` for assertions on the persisted transcript order. */
 class FakeContextProvider(
-  seeds: Map[ContextKey, List[Message]] = Map.empty,
+    seeds: Map[ContextKey, List[Message]] = Map.empty
 ) extends ContextProvider:
-  private val store = scala.collection.concurrent.TrieMap[ContextKey, List[Message]]()
+  private val store =
+    scala.collection.concurrent.TrieMap[ContextKey, List[Message]]()
   private val appendLog = ConcurrentLinkedQueue[(ContextKey, Message)]()
   seeds.foreach { case (k, v) => store.update(k, v) }
 
@@ -101,16 +114,21 @@ class GatewaySuite extends munit.FunSuite:
   private def workDir: String = java.io.File(".").getCanonicalFile.getPath
 
   private def runGateway(
-    ports: List[Port],
-    cp: ContextProvider,
-    endpointFactory: () => Endpoint,
-    created: AtomicInteger,
-    historySeen: ConcurrentLinkedQueue[List[Message]] = ConcurrentLinkedQueue(),
+      ports: List[Port],
+      cp: ContextProvider,
+      endpointFactory: () => Endpoint,
+      created: AtomicInteger,
+      historySeen: ConcurrentLinkedQueue[List[Message]] =
+        ConcurrentLinkedQueue()
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     val factory: (String, List[Message]) => ClawAgent = (wd, hist) =>
       created.incrementAndGet()
       historySeen.offer(hist)
-      ClawAgent(wd, initialMessages = hist, endpointOverride = Some(endpointFactory()))
+      ClawAgent(
+        wd,
+        initialMessages = hist,
+        endpointOverride = Some(endpointFactory())
+      )
 
     Async.blocking:
       val gateway = Gateway(workDir, ports, cp, factory)
@@ -127,8 +145,9 @@ class GatewaySuite extends munit.FunSuite:
     runGateway(
       List(port),
       cp,
-      endpointFactory = () => StubEndpoint(List(textResponse("hi"), textResponse("yes"))),
-      created = created,
+      endpointFactory =
+        () => StubEndpoint(List(textResponse("hi"), textResponse("yes"))),
+      created = created
     ) { _ =>
       val origin1 = Origin("slack", "C1", "U_alice")
       val origin2 = Origin("slack", "C1", "U_bob")
@@ -137,7 +156,11 @@ class GatewaySuite extends munit.FunSuite:
       port.push(GatewayMessage(origin2, "pong"))
       val reply2 = port.nextReply()
 
-      assertEquals(created.get, 1, "Only one ClawAgent should be created for one thread")
+      assertEquals(
+        created.get,
+        1,
+        "Only one ClawAgent should be created for one thread"
+      )
       assertEquals(reply1, (ContextKey("slack", "C1"), "hi"))
       assertEquals(reply2, (ContextKey("slack", "C1"), "yes"))
 
@@ -162,7 +185,7 @@ class GatewaySuite extends munit.FunSuite:
       List(port),
       cp,
       endpointFactory = () => StubEndpoint(List(textResponse("a"))),
-      created = created,
+      created = created
     ) { _ =>
       port.push(GatewayMessage(Origin("slack", "C1", "U1"), "m1"))
       port.nextReply()
@@ -176,7 +199,7 @@ class GatewaySuite extends munit.FunSuite:
     val priorKey = ContextKey("slack", "C1")
     val seed = List(
       Message.user("[U_old] what was yesterday?"),
-      Message.assistant("Tuesday."),
+      Message.assistant("Tuesday.")
     )
     val cp = FakeContextProvider(seeds = Map(priorKey -> seed))
     val port = FakePort("slack")
@@ -187,14 +210,17 @@ class GatewaySuite extends munit.FunSuite:
       cp,
       endpointFactory = () => StubEndpoint(List(textResponse("ok"))),
       created = created,
-      historySeen = seenHistory,
+      historySeen = seenHistory
     ) { _ =>
       port.push(GatewayMessage(Origin("slack", "C1", "U1"), "and today?"))
       port.nextReply()
 
       assertEquals(created.get, 1)
       val hist = seenHistory.iterator.asScala.toList.head
-      assertEquals(hist.map(_.text), List("[U_old] what was yesterday?", "Tuesday."))
+      assertEquals(
+        hist.map(_.text),
+        List("[U_old] what was yesterday?", "Tuesday.")
+      )
     }
 
   test("rejects messages whose origin.port does not match the sending port id"):
@@ -205,7 +231,7 @@ class GatewaySuite extends munit.FunSuite:
       List(port),
       cp,
       endpointFactory = () => StubEndpoint(List(textResponse("ok"))),
-      created = created,
+      created = created
     ) { _ =>
       // Push a GatewayMessage whose origin claims a different port; Gateway should
       // drop it instead of creating a runner.

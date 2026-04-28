@@ -31,13 +31,17 @@ object Message:
   def system(text: String): Message =
     Message(Role.System, List(Content.Text(text)))
 
-  def toolResult(toolUseId: String, content: String, isError: Boolean = false): Message =
+  def toolResult(
+      toolUseId: String,
+      content: String,
+      isError: Boolean = false
+  ): Message =
     Message(Role.User, List(Content.ToolResult(toolUseId, content, isError)))
 
 case class ChatResponse(
-  message: Message,
-  finishReason: FinishReason,
-  usage: Option[Usage] = None,
+    message: Message,
+    finishReason: FinishReason,
+    usage: Option[Usage] = None
 )
 
 enum FinishReason:
@@ -45,8 +49,8 @@ enum FinishReason:
   case Other(value: String)
 
 case class Usage(
-  inputTokens: Long,
-  outputTokens: Long,
+    inputTokens: Long,
+    outputTokens: Long
 )
 
 enum StreamEvent:

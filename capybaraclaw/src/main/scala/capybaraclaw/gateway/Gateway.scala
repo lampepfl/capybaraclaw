@@ -31,11 +31,13 @@ case class GatewayMessage(origin: Origin, text: String)
   * replies back is unambiguous.
   */
 class Gateway(
-  workDir: String,
-  ports: List[Port],
-  contextProvider: ContextProvider,
-  clawFactory: (String, List[tacit.agents.llm.endpoint.Message]) => ClawAgent =
-    (wd, hist) => ClawAgent(wd, initialMessages = hist),
+    workDir: String,
+    ports: List[Port],
+    contextProvider: ContextProvider,
+    clawFactory: (
+        String,
+        List[tacit.agents.llm.endpoint.Message]
+    ) => ClawAgent = (wd, hist) => ClawAgent(wd, initialMessages = hist)
 ):
   private val portsById: Map[String, Port] = ports.map(p => p.id -> p).toMap
   require(portsById.size == ports.size, "Port ids must be unique")
@@ -74,14 +76,16 @@ class Gateway(
         case Left(_) =>
           running = false
 
-  private def getOrCreateRunner(key: ContextKey)(using Async.Spawn): AgentRunner =
+  private def getOrCreateRunner(key: ContextKey)(using
+      Async.Spawn
+  ): AgentRunner =
     runnersLock.synchronized:
       runners.get(key) match
         case Some(r) => r
-        case None =>
+        case None    =>
           val port = portsById.getOrElse(
             key.port,
-            throw RuntimeException(s"No port registered with id '${key.port}'"),
+            throw RuntimeException(s"No port registered with id '${key.port}'")
           )
           val history = contextProvider.load(key)
           val claw = clawFactory(workDir, history)

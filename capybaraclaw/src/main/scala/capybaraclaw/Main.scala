@@ -49,5 +49,8 @@ private def printStartupInfo(workDir: String, enableSlack: Boolean): Unit =
   println(s"  workdir  : $workDir")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
-  println(s"  slack    : ${if enableSlack then "enabled" else "disabled (pass --enable-slack to enable)"}")
+  println(s"  slack    : ${
+      if enableSlack then "enabled"
+      else "disabled (pass --enable-slack to enable)"
+    }")
   println()

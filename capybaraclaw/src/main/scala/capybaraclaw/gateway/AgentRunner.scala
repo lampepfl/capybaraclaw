@@ -15,10 +15,10 @@ import tacit.agents.llm.endpoint.{Message, StreamEvent}
   * agent can still tell who said what.
   */
 class AgentRunner(
-  key: ContextKey,
-  claw: ClawAgent,
-  port: Port,
-  contextProvider: ContextProvider,
+    key: ContextKey,
+    claw: ClawAgent,
+    port: Port,
+    contextProvider: ContextProvider
 ):
   private val inbox = UnboundedChannel[GatewayMessage]()
 
@@ -27,7 +27,8 @@ class AgentRunner(
     catch case _: gears.async.ChannelClosedException => ()
 
   def close(): Unit =
-    try inbox.close() catch case _: Throwable => ()
+    try inbox.close()
+    catch case _: Throwable => ()
 
   def start()(using Async.Spawn): Future[Unit] =
     Future(runLoop())
@@ -38,8 +39,11 @@ class AgentRunner(
       inbox.read() match
         case Right(msg) =>
           try processTurn(msg)
-          catch case e: Exception =>
-            System.err.println(s"[runner ${key}] turn failed: ${e.getMessage}")
+          catch
+            case e: Exception =>
+              System.err.println(
+                s"[runner ${key}] turn failed: ${e.getMessage}"
+              )
         case Left(_) =>
           running = false
 
@@ -53,7 +57,9 @@ class AgentRunner(
 
     while reading do
       run.events.read() match
-        case Right(Right(AgentStreamEvent.Stream(StreamEvent.Done(response)))) =>
+        case Right(
+              Right(AgentStreamEvent.Stream(StreamEvent.Done(response)))
+            ) =>
           finalText = response.message.text
           drainSteers(run)
         case Right(_) =>
@@ -64,13 +70,17 @@ class AgentRunner(
     if finalText.nonEmpty then
       contextProvider.append(key, Message.assistant(finalText))
       try port.send(key, finalText)
-      catch case e: Exception =>
-        System.err.println(s"[runner ${key}] port.send failed: ${e.getMessage}")
+      catch
+        case e: Exception =>
+          System.err.println(
+            s"[runner ${key}] port.send failed: ${e.getMessage}"
+          )
 
   /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the
     * active run. Persist only after a successful steer: a rejected steer (race with
     * run termination) is re-delivered to the inbox so the next turn picks it up, and
-    * persisting there instead of here keeps the transcript free of duplicates. */
+    * persisting there instead of here keeps the transcript free of duplicates.
+    */
   private def drainSteers(run: AgentRun): Unit =
     var draining = true
     while draining do

@@ -2,7 +2,16 @@ package tacit.agents
 package llm
 package agentic
 
-import endpoint.{Endpoint, LLMConfig, LLMError, Message, Content, ChatResponse, FinishReason, Usage}
+import endpoint.{
+  Endpoint,
+  LLMConfig,
+  LLMError,
+  Message,
+  Content,
+  ChatResponse,
+  FinishReason,
+  Usage
+}
 import tacit.agents.utils.Result
 import tacit.agents.llm.utils.IsToolArg
 import gears.async.{Async, ReadableChannel, UnboundedChannel, Future}
@@ -18,42 +27,51 @@ class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
 
   def invokedWith: List[List[Message]] = _invokedWith
 
-  def invoke(messages: List[Message], config: LLMConfig): Result[ChatResponse, LLMError] =
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] =
     _invokedWith = _invokedWith :+ messages
-    if callIndex < responses.length then
-      val resp = responses(callIndex)
-      callIndex += 1
-      Right(resp)
-    else
-      Left(LLMError("No more stub responses"))
-
-  def stream(messages: List[Message], config: LLMConfig)(using Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
-    _invokedWith = _invokedWith :+ messages
-    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
-    if callIndex < responses.length then
-      val resp = responses(callIndex)
-      callIndex += 1
-      ch.sendImmediately(Right(StreamEvent.Done(resp)))
-    else
-      ch.sendImmediately(Left(LLMError("No more stub responses")))
-    ch.asReadable
-
-/** Stub endpoint whose `stream` suspends on a gate before delivering. Lets steering tests
-  * interleave a `run.steer(...)` call before the agent's first LLM turn completes. */
-class GatedStubEndpoint(responses: List[ChatResponse]) extends Endpoint:
-  private var callIndex = 0
-  private val gate = CountDownLatch(1)
-
-  def release(): Unit = gate.countDown()
-
-  def invoke(messages: List[Message], config: LLMConfig): Result[ChatResponse, LLMError] =
     if callIndex < responses.length then
       val resp = responses(callIndex)
       callIndex += 1
       Right(resp)
     else Left(LLMError("No more stub responses"))
 
-  def stream(messages: List[Message], config: LLMConfig)(using spawn: Async.Spawn): ReadableChannel[Result[StreamEvent, LLMError]] =
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
+    _invokedWith = _invokedWith :+ messages
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
+    if callIndex < responses.length then
+      val resp = responses(callIndex)
+      callIndex += 1
+      ch.sendImmediately(Right(StreamEvent.Done(resp)))
+    else ch.sendImmediately(Left(LLMError("No more stub responses")))
+    ch.asReadable
+
+/** Stub endpoint whose `stream` suspends on a gate before delivering. Lets steering tests
+  * interleave a `run.steer(...)` call before the agent's first LLM turn completes.
+  */
+class GatedStubEndpoint(responses: List[ChatResponse]) extends Endpoint:
+  private var callIndex = 0
+  private val gate = CountDownLatch(1)
+
+  def release(): Unit = gate.countDown()
+
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] =
+    if callIndex < responses.length then
+      val resp = responses(callIndex)
+      callIndex += 1
+      Right(resp)
+    else Left(LLMError("No more stub responses"))
+
+  def stream(messages: List[Message], config: LLMConfig)(using
+      spawn: Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
     val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
     val firstCall = callIndex == 0
     val delivered =
@@ -83,16 +101,18 @@ object LookupTool extends AgentTool[AgentState]:
   type ArgType = LookupArgs
   def name = "lookup"
   def description = "Look up a value by key"
-  def handle(arg: LookupArgs, state: AgentState): String = s"Value for ${arg.key}: found"
+  def handle(arg: LookupArgs, state: AgentState): String =
+    s"Value for ${arg.key}: found"
 
 case class GreetArgs(name: String) derives IsToolArg
 
 /** Tool whose `handle` signals a latch on entry and waits on another latch before returning.
-  * Used to hold a tool dispatch open while the test calls `steer(...)`. */
+  * Used to hold a tool dispatch open while the test calls `steer(...)`.
+  */
 class LatchTool(
-  val toolName: String,
-  entered: CountDownLatch,
-  release: CountDownLatch,
+    val toolName: String,
+    entered: CountDownLatch,
+    release: CountDownLatch
 ) extends AgentTool[AgentState]:
   type ArgType = CalcArgs
   def name = toolName
@@ -114,7 +134,10 @@ def textResponse(text: String): ChatResponse =
 def toolCallResponse(calls: (String, String, String)*): ChatResponse =
   val content = calls.map: (id, name, input) =>
     Content.ToolUse(id, name, input)
-  ChatResponse(Message(endpoint.Role.Assistant, content.toList), FinishReason.ToolUse)
+  ChatResponse(
+    Message(endpoint.Role.Assistant, content.toList),
+    FinishReason.ToolUse
+  )
 
 val defaultConfig = LLMConfig(model = "test-model")
 
@@ -131,7 +154,7 @@ def readAll[T](ch: ReadableChannel[T])(using Async): List[T] =
   while reading do
     ch.read() match
       case Right(item) => buf += item
-      case Left(_) => reading = false
+      case Left(_)     => reading = false
   buf.toList
 
 // --- Tests ---
@@ -147,10 +170,12 @@ class AgentSuite extends munit.FunSuite:
     assertEquals(result.toOption.get.message.text, "Hello!")
 
   test("ask: single tool call then final response"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
-      textResponse("The answer is 42."),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
+        textResponse("The answer is 42.")
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent(List(CalcTool))
     val result = agent.ask("What is 2+2?")
@@ -163,27 +188,33 @@ class AgentSuite extends munit.FunSuite:
     assertEquals(toolResult, Some(("call-1", "Result: 42")))
 
   test("ask: multiple tool calls in one response"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(
-        ("call-1", "calculate", """{"expression": "1+1"}"""),
-        ("call-2", "lookup", """{"key": "pi"}"""),
-      ),
-      textResponse("Done."),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(
+          ("call-1", "calculate", """{"expression": "1+1"}"""),
+          ("call-2", "lookup", """{"key": "pi"}""")
+        ),
+        textResponse("Done.")
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent(List(CalcTool, LookupTool))
     val result = agent.ask("Do both")
     assert(result.isRight)
     assertEquals(result.toOption.get.message.text, "Done.")
     val secondCall = ep.invokedWith(1)
-    val toolResults = secondCall.flatMap(_.content).collect:
-      case Content.ToolResult(id, content, _) => (id, content)
+    val toolResults = secondCall
+      .flatMap(_.content)
+      .collect:
+        case Content.ToolResult(id, content, _) => (id, content)
     assertEquals(toolResults.size, 2)
 
   test("ask: unknown tool name returns error"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(("call-1", "nonexistent", """{}""")),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "nonexistent", """{}"""))
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent()
     val result = agent.ask("Call something")
@@ -191,14 +222,18 @@ class AgentSuite extends munit.FunSuite:
     assert(result.swap.toOption.get.description.contains("Unknown tool"))
 
   test("ask: tool arg parse failure returns error"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(("call-1", "calculate", """not json""")),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "calculate", """not json"""))
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent(List(CalcTool))
     val result = agent.ask("Calculate")
     assert(result.isLeft)
-    assert(result.swap.toOption.get.description.contains("Failed to parse args"))
+    assert(
+      result.swap.toOption.get.description.contains("Failed to parse args")
+    )
 
   test("ask: endpoint error propagates"):
     val ep = StubEndpoint(Nil)
@@ -206,7 +241,9 @@ class AgentSuite extends munit.FunSuite:
     val agent = makeAgent()
     val result = agent.ask("Hi")
     assert(result.isLeft)
-    assert(result.swap.toOption.get.description.contains("No more stub responses"))
+    assert(
+      result.swap.toOption.get.description.contains("No more stub responses")
+    )
 
   test("addTool: mutably adds tool and returns same agent"):
     val agent = makeAgent()
@@ -241,10 +278,12 @@ class AgentSuite extends munit.FunSuite:
       agent.addTools(CalcTool, CalcTool)
 
   test("handle: creates tool from lambda"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(("call-1", "greet", """{"name": "Alice"}""")),
-      textResponse("Done."),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "greet", """{"name": "Alice"}""")),
+        textResponse("Done.")
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent()
     agent.handle[GreetArgs]("greet", "Greet someone"): (arg, state) =>
@@ -277,17 +316,22 @@ class AgentSuite extends munit.FunSuite:
     assertEquals(agent.state.messages(1).text, "Hello!")
 
   test("ask: state.messages includes tool use and tool result on tool calls"):
-    val ep = StubEndpoint(List(
-      toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
-      textResponse("The answer is 42."),
-    ))
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
+        textResponse("The answer is 42.")
+      )
+    )
     given Endpoint = ep
     val agent = makeAgent(List(CalcTool))
     agent.ask("What is 2+2?")
     // user + assistant(tool_use) + tool_result + assistant(final)
     assertEquals(agent.state.messages.size, 4)
-    val toolResult = agent.state.messages(2).content.collectFirst:
-      case Content.ToolResult(id, content, _) => (id, content)
+    val toolResult = agent.state
+      .messages(2)
+      .content
+      .collectFirst:
+        case Content.ToolResult(id, content, _) => (id, content)
     assertEquals(toolResult, Some(("call-1", "Result: 42")))
     assertEquals(agent.state.messages(3).text, "The answer is 42.")
 
@@ -298,7 +342,10 @@ class AgentSuite extends munit.FunSuite:
     agent.ask("One")
     agent.ask("Two")
     assertEquals(agent.state.messages.size, 4)
-    assertEquals(agent.state.messages.map(_.text), List("One", "First", "Two", "Second"))
+    assertEquals(
+      agent.state.messages.map(_.text),
+      List("One", "First", "Two", "Second")
+    )
 
   // --- streamAsk tests ---
 
@@ -317,10 +364,14 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: tool call emits Done, ToolResult, then final Done"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
-        textResponse("The answer is 42."),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(
+            ("call-1", "calculate", """{"expression": "2+2"}""")
+          ),
+          textResponse("The answer is 42.")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool))
       val ch = agent.streamAsk("What is 2+2?").events
@@ -358,9 +409,11 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: unknown tool emits error"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "nonexistent", """{}""")),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "nonexistent", """{}"""))
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent()
       val ch = agent.streamAsk("Call something").events
@@ -370,9 +423,11 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: tool arg parse failure emits error"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """not json""")),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "calculate", """not json"""))
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool))
       val ch = agent.streamAsk("Calculate").events
@@ -382,13 +437,15 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: multiple tool calls in one response"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(
-          ("call-1", "calculate", """{"expression": "1+1"}"""),
-          ("call-2", "lookup", """{"key": "pi"}"""),
-        ),
-        textResponse("Done."),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(
+            ("call-1", "calculate", """{"expression": "1+1"}"""),
+            ("call-2", "lookup", """{"key": "pi"}""")
+          ),
+          textResponse("Done.")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool, LookupTool))
       val ch = agent.streamAsk("Do both").events
@@ -407,18 +464,25 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: state.messages includes tool use and tool result"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """{"expression": "2+2"}""")),
-        textResponse("42"),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(
+            ("call-1", "calculate", """{"expression": "2+2"}""")
+          ),
+          textResponse("42")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool))
       val ch = agent.streamAsk("Calc").events
       readAll(ch)
       // user + assistant(tool_use) + tool_result + assistant(final)
       assertEquals(agent.state.messages.size, 4)
-      val toolResult = agent.state.messages(2).content.collectFirst:
-        case Content.ToolResult(id, content, _) => (id, content)
+      val toolResult = agent.state
+        .messages(2)
+        .content
+        .collectFirst:
+          case Content.ToolResult(id, content, _) => (id, content)
       assertEquals(toolResult, Some(("call-1", "Result: 42")))
       assertEquals(agent.state.messages(3).text, "42")
 
@@ -430,14 +494,19 @@ class AgentSuite extends munit.FunSuite:
       readAll(agent.streamAsk("One").events)
       readAll(agent.streamAsk("Two").events)
       assertEquals(agent.state.messages.size, 4)
-      assertEquals(agent.state.messages.map(_.text), List("One", "First", "Two", "Second"))
+      assertEquals(
+        agent.state.messages.map(_.text),
+        List("One", "First", "Two", "Second")
+      )
 
   test("streamAsk: event ordering is Stream(Done), ToolResult, Stream(Done)"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
-        textResponse("Final"),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
+          textResponse("Final")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool))
       val ch = agent.streamAsk("Go").events
@@ -456,16 +525,20 @@ class AgentSuite extends munit.FunSuite:
       val agent = makeAgent(List(CalcTool))
       val ch = agent.streamAsk("Hello").events
       val events = readAll(ch).collect { case Right(e) => e }
-      val toolResults = events.collect { case e: AgentStreamEvent.ToolResult => e }
+      val toolResults = events.collect { case e: AgentStreamEvent.ToolResult =>
+        e
+      }
       assertEquals(toolResults.size, 0)
       assertEquals(events.size, 1)
 
   test("streamAsk: handle lambda tool works with streaming"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "greet", """{"name": "Bob"}""")),
-        textResponse("Greeted Bob."),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "greet", """{"name": "Bob"}""")),
+          textResponse("Greeted Bob.")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent()
       agent.handle[GreetArgs]("greet", "Greet someone"): (arg, _) =>
@@ -479,10 +552,12 @@ class AgentSuite extends munit.FunSuite:
 
   test("streamAsk: ToolResult carries correct id and tool name"):
     Async.blocking:
-      val ep = StubEndpoint(List(
-        toolCallResponse(("my-id-42", "lookup", """{"key": "answer"}""")),
-        textResponse("Done"),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("my-id-42", "lookup", """{"key": "answer"}""")),
+          textResponse("Done")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(LookupTool))
       val ch = agent.streamAsk("Look up").events
@@ -490,7 +565,10 @@ class AgentSuite extends munit.FunSuite:
 
       val toolResults = events.collect:
         case AgentStreamEvent.ToolResult(id, name, result) => (id, name, result)
-      assertEquals(toolResults, List(("my-id-42", "lookup", "Value for answer: found")))
+      assertEquals(
+        toolResults,
+        List(("my-id-42", "lookup", "Value for answer: found"))
+      )
 
   test("streamAsk: endpoint error description is preserved"):
     Async.blocking:
@@ -504,15 +582,19 @@ class AgentSuite extends munit.FunSuite:
 
   // --- steering tests ---
 
-  test("steer: drained after tool result yields Steered event + appended message"):
+  test(
+    "steer: drained after tool result yields Steered event + appended message"
+  ):
     Async.blocking:
       val entered = CountDownLatch(1)
       val release = CountDownLatch(1)
       val tool = LatchTool("calculate", entered, release)
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
-        textResponse("Final"),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
+          textResponse("Final")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(tool))
       val run = agent.streamAsk("Start")
@@ -535,10 +617,12 @@ class AgentSuite extends munit.FunSuite:
       val entered = CountDownLatch(1)
       val release = CountDownLatch(1)
       val tool = LatchTool("calculate", entered, release)
-      val ep = StubEndpoint(List(
-        toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
-        textResponse("Done"),
-      ))
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "calculate", """{"expression": "x"}""")),
+          textResponse("Done")
+        )
+      )
       given Endpoint = ep
       val agent = makeAgent(List(tool))
       val run = agent.streamAsk("Start")
@@ -565,7 +649,9 @@ class AgentSuite extends munit.FunSuite:
       ep.release()
       val events = eventsFuture.await.collect { case Right(e) => e }
 
-      val unconsumed = events.collect { case AgentStreamEvent.Unconsumed(ts) => ts }
+      val unconsumed = events.collect { case AgentStreamEvent.Unconsumed(ts) =>
+        ts
+      }
       assertEquals(unconsumed, List(List("late context")))
       assert(!agent.state.messages.exists(_.text == "late context"))
 

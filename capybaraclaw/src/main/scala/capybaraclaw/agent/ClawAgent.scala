@@ -14,19 +14,21 @@ case class EvalScalaArgs(code: String) derives IsToolArg
 
 /** Agent class for Claw. */
 class ClawAgent(
-  val workDir: String,
-  initialMessages: List[Message] = Nil,
-  endpointOverride: Option[Endpoint] = None,
+    val workDir: String,
+    initialMessages: List[Message] = Nil,
+    endpointOverride: Option[Endpoint] = None
 ):
   val agentConfig: AgentConfig = AgentConfig.load(workDir)
 
   private val tacitContext: TacitContext = TacitContext(
     TacitConfig(
       libraryConfig = Json.obj(
-        "classifiedPaths" -> agentConfig.classifiedPaths.map(p => java.io.File(workDir, p).getCanonicalPath).asJson
-      ),
+        "classifiedPaths" -> agentConfig.classifiedPaths
+          .map(p => java.io.File(workDir, p).getCanonicalPath)
+          .asJson
+      )
     ),
-    recorder = None,
+    recorder = None
   )
   private val repl: ReplSession = ReplSession.create(using tacitContext)
 
@@ -37,21 +39,24 @@ class ClawAgent(
     case "ollama"     => OllamaEndpoint.createFromEnv()
     case other        => throw RuntimeException(s"Unknown provider: $other"))
 
-
   private val agent: Agent =
     val a = new Agent:
       type State = AgentState
       def getInitState = new AgentState:
         val llmConfig = agentConfig.toLLMConfig
 
-    a.handle[EvalScalaArgs]("evaluate_scala", "Evaluate a Scala expression in a persistent REPL session"): (args, _) =>
+    a.handle[EvalScalaArgs](
+      "evaluate_scala",
+      "Evaluate a Scala expression in a persistent REPL session"
+    ): (args, _) =>
       val result = repl.execute(args.code)
       if result.success then
         if result.output.nonEmpty then result.output
         else "(executed successfully, no output)"
       else
         val msg = StringBuilder("Execution failed.\n")
-        if result.output.nonEmpty then msg.append(s"Output:\n${result.output}\n")
+        if result.output.nonEmpty then
+          msg.append(s"Output:\n${result.output}\n")
         result.error.foreach(e => msg.append(s"Error:\n$e\n"))
         msg.toString
 
@@ -62,8 +67,8 @@ class ClawAgent(
     a
 
   def ask(
-    message: String,
-    onToolCall: Option[(String, String, String) => Unit] = None,
+      message: String,
+      onToolCall: Option[(String, String, String) => Unit] = None
   ): Result[ChatResponse, AgentError] =
     agent.ask(message, onToolCall)
 

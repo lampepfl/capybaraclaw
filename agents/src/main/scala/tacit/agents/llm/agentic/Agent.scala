@@ -2,14 +2,32 @@ package tacit.agents
 package llm
 package agentic
 
-import endpoint.{Endpoint, LLMConfig, LLMError, Message, Content, ChatResponse, FinishReason, ToolSchema, StreamEvent}
+import endpoint.{
+  Endpoint,
+  LLMConfig,
+  LLMError,
+  Message,
+  Content,
+  ChatResponse,
+  FinishReason,
+  ToolSchema,
+  StreamEvent
+}
 import tacit.agents.utils.Result
 import tacit.agents.utils.Result.ok
 import llm.utils.{IsToolArg, ToolArgParsingError}
 import scala.util.boundary
 import scala.annotation.tailrec
 import java.util.concurrent.atomic.AtomicBoolean
-import gears.async.{Async, Future, SyncChannel, ReadableChannel, UnboundedChannel, Channel, ChannelClosedException}
+import gears.async.{
+  Async,
+  Future,
+  SyncChannel,
+  ReadableChannel,
+  UnboundedChannel,
+  Channel,
+  ChannelClosedException
+}
 
 class AgentError(val description: String):
   override def toString: String = s"AgentError: $description"
@@ -26,9 +44,9 @@ enum SteerOutcome:
   case RejectedRunEnded
 
 class AgentRun private[agentic] (
-  val events: ReadableChannel[Result[AgentStreamEvent, AgentError]],
-  private val steering: UnboundedChannel[String],
-  private val completed: AtomicBoolean,
+    val events: ReadableChannel[Result[AgentStreamEvent, AgentError]],
+    private val steering: UnboundedChannel[String],
+    private val completed: AtomicBoolean
 ):
   def steer(text: String): SteerOutcome =
     if completed.get then SteerOutcome.RejectedRunEnded
@@ -36,8 +54,9 @@ class AgentRun private[agentic] (
       try
         steering.sendImmediately(text)
         SteerOutcome.Accepted
-      catch case _: ChannelClosedException =>
-        SteerOutcome.RejectedRunEnded
+      catch
+        case _: ChannelClosedException =>
+          SteerOutcome.RejectedRunEnded
 
   def isActive: Boolean = !completed.get
 
@@ -54,7 +73,11 @@ trait AgentTool[-StateType <: AgentState]:
   def handle(arg: ArgType, state: StateType): String
 
   def toolSchema: ToolSchema =
-    ToolSchema(name, description, parameters = summon[IsToolArg[ArgType]].schema)
+    ToolSchema(
+      name,
+      description,
+      parameters = summon[IsToolArg[ArgType]].schema
+    )
 
   def parseArgs(input: String): Result[ArgType, ToolArgParsingError] =
     summon[IsToolArg[ArgType]].parse(input)
@@ -71,7 +94,9 @@ abstract class Agent:
 
   def addTool(tool: AgentTool[State]): this.type =
     if _tools.exists(_.name == tool.name) then
-      throw IllegalArgumentException(s"Tool with name '${tool.name}' already exists")
+      throw IllegalArgumentException(
+        s"Tool with name '${tool.name}' already exists"
+      )
     _tools = _tools :+ tool
     this
 
@@ -79,7 +104,9 @@ abstract class Agent:
     newTools.foreach(addTool)
     this
 
-  def handle[A: IsToolArg](toolName: String, desc: String)(handler: (A, this.State) => String): this.type =
+  def handle[A: IsToolArg](toolName: String, desc: String)(
+      handler: (A, this.State) => String
+  ): this.type =
     val tool = new AgentTool[State]:
       type ArgType = A
       def name = toolName
@@ -88,8 +115,8 @@ abstract class Agent:
     addTool(tool)
 
   def ask(
-    message: String,
-    onToolCall: Option[(String, String, String) => Unit] = None,
+      message: String,
+      onToolCall: Option[(String, String, String) => Unit] = None
   )(using endpoint: Endpoint): Result[ChatResponse, AgentError] =
     state.messages = state.messages :+ Message.user(message)
     val config = state.llmConfig.copy(tools = tools.map(_.toolSchema))
@@ -98,12 +125,15 @@ abstract class Agent:
 
   @tailrec
   private def loop(
-    config: LLMConfig,
-    onToolCall: Option[(String, String, String) => Unit],
-  )(using endpoint: Endpoint, label: boundary.Label[Result[ChatResponse, AgentError]]): ChatResponse =
+      config: LLMConfig,
+      onToolCall: Option[(String, String, String) => Unit]
+  )(using
+      endpoint: Endpoint,
+      label: boundary.Label[Result[ChatResponse, AgentError]]
+  ): ChatResponse =
     val response = endpoint.invoke(state.messages, config) match
       case Right(r) => r
-      case Left(e) => boundary.break(Left(AgentError(e.description)))
+      case Left(e)  => boundary.break(Left(AgentError(e.description)))
 
     state.messages = state.messages :+ response.message
 
@@ -128,7 +158,9 @@ abstract class Agent:
 
       case _ => response
 
-  def streamAsk(message: String)(using endpoint: Endpoint, spawn: Async.Spawn): AgentRun =
+  def streamAsk(
+      message: String
+  )(using endpoint: Endpoint, spawn: Async.Spawn): AgentRun =
     state.messages = state.messages :+ Message.user(message)
     val config = state.llmConfig.copy(tools = tools.map(_.toolSchema))
     val ch = SyncChannel[Result[AgentStreamEvent, AgentError]]()
@@ -144,8 +176,10 @@ abstract class Agent:
         if leftover.nonEmpty then
           try ch.send(Right(AgentStreamEvent.Unconsumed(leftover)))
           catch case _: Throwable => ()
-        try steering.close() catch case _: Throwable => ()
-        try ch.close() catch case _: Throwable => ()
+        try steering.close()
+        catch case _: Throwable => ()
+        try ch.close()
+        catch case _: Throwable => ()
     AgentRun(ch.asReadable, steering, completed)
 
   private def drainSteering(queue: UnboundedChannel[String]): List[String] =
@@ -158,9 +192,9 @@ abstract class Agent:
     buf.toList
 
   private def streamLoop(
-    config: LLMConfig,
-    ch: SyncChannel[Result[AgentStreamEvent, AgentError]],
-    steering: UnboundedChannel[String],
+      config: LLMConfig,
+      ch: SyncChannel[Result[AgentStreamEvent, AgentError]],
+      steering: UnboundedChannel[String]
   )(using endpoint: Endpoint, spawn: Async.Spawn): Unit =
     try
       val streamCh = endpoint.stream(state.messages, config)
@@ -183,7 +217,15 @@ abstract class Agent:
               for case (tu, Right(msg)) <- dispatched do
                 val resultContent = msg.content.collectFirst:
                   case Content.ToolResult(_, content, _) => content
-                ch.send(Right(AgentStreamEvent.ToolResult(tu.id, tu.name, resultContent.getOrElse(""))))
+                ch.send(
+                  Right(
+                    AgentStreamEvent.ToolResult(
+                      tu.id,
+                      tu.name,
+                      resultContent.getOrElse("")
+                    )
+                  )
+                )
                 state.messages = state.messages :+ msg
 
               val steered = drainSteering(steering)
@@ -205,8 +247,8 @@ abstract class Agent:
         catch case _: Throwable => ()
 
   private def consumeStream(
-    streamCh: ReadableChannel[Result[StreamEvent, LLMError]],
-    outCh: SyncChannel[Result[AgentStreamEvent, AgentError]]
+      streamCh: ReadableChannel[Result[StreamEvent, LLMError]],
+      outCh: SyncChannel[Result[AgentStreamEvent, AgentError]]
   )(using Async): ChatResponse =
     var finalResponse: ChatResponse | Null = null
     var reading = true
@@ -233,11 +275,14 @@ abstract class Agent:
   private def redactMaxTokensMessage(response: ChatResponse): Unit =
     val cleaned = response.message.content.filter:
       case _: Content.ToolUse => false
-      case _ => true
+      case _                  => true
     // Replace the last message in history with the cleaned version
-    state.messages = state.messages.init :+ response.message.copy(content = cleaned)
+    state.messages =
+      state.messages.init :+ response.message.copy(content = cleaned)
 
-  private def dispatchTool(toolUse: Content.ToolUse): Result[Message, AgentError] =
+  private def dispatchTool(
+      toolUse: Content.ToolUse
+  ): Result[Message, AgentError] =
     tools.find(_.name == toolUse.name) match
       case None =>
         Left(AgentError(s"Unknown tool: ${toolUse.name}"))
@@ -245,7 +290,11 @@ abstract class Agent:
       case Some(tool) =>
         tool.parseArgs(toolUse.input) match
           case Left(err) =>
-            Left(AgentError(s"Failed to parse args for ${toolUse.name}: ${err.message}"))
+            Left(
+              AgentError(
+                s"Failed to parse args for ${toolUse.name}: ${err.message}"
+              )
+            )
 
           case Right(args) =>
             val result = tool.handle(args.asInstanceOf[tool.ArgType], state)

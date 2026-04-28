@@ -9,9 +9,9 @@ import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
   * or hit Ctrl-D to close.
   */
 class CliPort(
-  override val id: String = CliPort.Id,
-  user: String = sys.env.getOrElse("USER", "cli"),
-  thread: String = "stdin",
+    override val id: String = CliPort.Id,
+    user: String = sys.env.getOrElse("USER", "cli"),
+    thread: String = "stdin"
 ) extends Port:
 
   private val outCh = UnboundedChannel[GatewayMessage]()
@@ -60,7 +60,8 @@ class CliPort(
     System.out.flush()
 
   /** Prefix the first line of the agent's reply with `claw > ` and indent every
-    * continuation line to align with it, so multi-line replies stay readable. */
+    * continuation line to align with it, so multi-line replies stay readable.
+    */
   private def formatReply(text: String): String =
     val lines = if text.isEmpty then List("") else text.linesIterator.toList
     val indent = " " * CliPort.AgentLabel.length
@@ -68,7 +69,8 @@ class CliPort(
     (head :: lines.tail.map(indent + _)).mkString("\n")
 
   private def closeChannel(): Unit =
-    try outCh.close() catch case _: Throwable => ()
+    try outCh.close()
+    catch case _: Throwable => ()
 
 object CliPort:
   val Id: String = "cli"
