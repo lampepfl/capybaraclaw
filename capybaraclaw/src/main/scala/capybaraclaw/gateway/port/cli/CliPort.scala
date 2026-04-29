@@ -10,7 +10,7 @@ import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.List as JList
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.annotation.tailrec
 import scala.util.control.NonFatal
 import scala.util.Random
@@ -50,7 +50,8 @@ class CliPort(
   private val inputReadPermitQueued = AtomicBoolean(false)
   private val inputReadInProgress = AtomicBoolean(false)
   private val backgroundLoopsRunning = AtomicBoolean(true)
-  private var preTurnAttributes: Option[Attributes] = None
+  private val preTurnAttributes: AtomicReference[Option[Attributes]] =
+    AtomicReference(None)
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
@@ -347,19 +348,19 @@ class CliPort(
 
   private def suppressTerminalEcho(): Unit =
     try
-      if preTurnAttributes.isEmpty then
-        val previous = terminal.getAttributes
+      val previous = terminal.getAttributes
+      if preTurnAttributes.compareAndSet(None, Some(previous)) then
         val next = Attributes(previous)
         next.setLocalFlag(Attributes.LocalFlag.ECHO, false)
         terminal.setAttributes(next)
-        preTurnAttributes = Some(previous)
     catch case _: Throwable => ()
 
   private def restoreTerminalEcho(): Unit =
-    preTurnAttributes.foreach: attributes =>
-      try terminal.setAttributes(attributes)
-      catch case _: Throwable => ()
-    preTurnAttributes = None
+    preTurnAttributes
+      .getAndSet(None)
+      .foreach: attributes =>
+        try terminal.setAttributes(attributes)
+        catch case _: Throwable => ()
 
   private def requestStop(): Unit =
     backgroundLoopsRunning.set(false)
