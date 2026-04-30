@@ -77,10 +77,10 @@ lazy val capybaraclaw = project
     libraryDependencies ++= Seq(
       "com.slack.api" % "bolt" % "1.48.0",
       "com.slack.api" % "bolt-socket-mode" % "1.48.0",
-      "ch.qos.logback" % "logback-classic" % "1.5.16",
+      "ch.qos.logback" % "logback-classic" % "1.5.32",
       "org.glassfish.tyrus.bundles" % "tyrus-standalone-client" % "1.21",
-      "org.jline" % "jline-reader" % "3.29.0",
-      "org.jline" % "jline-terminal-jni" % "3.29.0",
+      "org.jline" % "jline-reader" % "4.0.12",
+      "org.jline" % "jline-terminal-jni" % "4.0.12",
       "xyz.matthieucourt" %% "layoutz" % "0.7.0",
       "com.github.alexarchambault" %% "case-app" % "2.1.0",
       "lampepfl" %% "tacit" % tacitVersion,
