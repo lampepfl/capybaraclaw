@@ -3,18 +3,28 @@ package capybaraclaw.gateway.port.cli
 import capybaraclaw.agent.AgentConfig
 import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
 import capybaraclaw.gateway.port.Port
-import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
+
 import gears.async.AsyncOperations.sleep
+import gears.async.{
+  Async,
+  ChannelClosedException,
+  Future,
+  ReadableChannel,
+  UnboundedChannel
+}
 import gears.async.default.given
+
 import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.List as JList
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
+
 import scala.annotation.tailrec
 import scala.util.control.NonFatal
-import scala.util.Random
+import scala.util.{Random, Success, Try}
+
 import layoutz.*
+
 import org.jline.reader.{
   EndOfFileException,
   LineReader,
@@ -24,17 +34,19 @@ import org.jline.reader.{
 import org.jline.terminal.{Attributes, Terminal, TerminalBuilder}
 import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 
-/** Inline CLI port backed by jline. */
+/** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
     override val id: String = CliPort.Id,
     user: String = sys.env.getOrElse("USER", "cli"),
     workDirFile: File = java.io.File(".").getCanonicalFile
 ) extends Port:
   import CliPort.*
+  import CliTransitions.*
 
   private val outCh = UnboundedChannel[GatewayMessage]()
   private val events = UnboundedChannel[CliEvent]()
   private val inputReadPermits = UnboundedChannel[Unit]()
+  private val shutdownPromise: Future.Promise[Unit] = Future.Promise[Unit]()
   private val agentConfig = AgentConfig.load(workDirFile.getPath)
 
   private val (terminal: Terminal, terminalOwnsStdio: Boolean) =
@@ -45,13 +57,6 @@ class CliPort(
 
   private val threadKey: String = "stdin"
   private val sessionStartMillis = System.currentTimeMillis()
-  private val spinnerActive = AtomicBoolean(false)
-  private val spinnerTickQueued = AtomicBoolean(false)
-  private val inputReadPermitQueued = AtomicBoolean(false)
-  private val inputReadInProgress = AtomicBoolean(false)
-  private val backgroundLoopsRunning = AtomicBoolean(true)
-  private val preTurnAttributes: AtomicReference[Option[Attributes]] =
-    AtomicReference(None)
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
@@ -61,8 +66,9 @@ class CliPort(
         printHeader()
         offerInputReadPermit()
         val _ = Future(readInputLoop())
-        val _ = Future(spinnerTickLoop())
-        val finalState = runEventLoop(State.initial)
+        val finalState =
+          Async.group:
+            runEventLoop(RuntimeState.initial).state
         printGoodbye(finalState.turnCount)
       finally cleanup()
 
@@ -76,15 +82,13 @@ class CliPort(
     offerEvent(TurnFinished)
 
   def shutdown(): Unit =
-    if !offerEvent(ShutdownRequested) then requestStop()
+    Try(shutdownPromise.complete(Success(())))
 
-  private def readInputLoop()(using Async.Spawn): Unit =
+  private def readInputLoop()(using Async): Unit =
     @tailrec
     def loop(): Unit =
       inputReadPermits.read() match
         case Right(_) =>
-          inputReadPermitQueued.set(false)
-          inputReadInProgress.set(true)
           val event =
             try
               Option(reader.readLine(userPrompt)) match
@@ -94,7 +98,6 @@ class CliPort(
               case _: EndOfFileException     => InputClosed
               case _: UserInterruptException => UserInput("")
               case NonFatal(error)           => InputReadFailed(error)
-            finally inputReadInProgress.set(false)
           val shouldContinue = offerEvent(event) && event != InputClosed
           if shouldContinue then
             event match
@@ -105,155 +108,86 @@ class CliPort(
           ()
     loop()
 
-  private def spinnerTickLoop()(using Async.Spawn): Unit =
-    @tailrec
-    def loop(): Unit =
+  private def runSpinner()(using Async): Unit =
+    while true do
       sleep(SpinnerIntervalMs)
-      val shouldContinue =
-        backgroundLoopsRunning.get() &&
-          (
-            if spinnerActive.get() && spinnerTickQueued.compareAndSet(
-                false,
-                true
-              )
-            then
-              if offerEvent(SpinnerTick(System.currentTimeMillis())) then true
-              else
-                spinnerTickQueued.set(false)
-                false
-            else true
-          )
-      if shouldContinue then loop()
-    loop()
+      offerEvent(SpinnerTick(System.currentTimeMillis()))
 
-  private def runEventLoop(initial: State)(using
+  private def runEventLoop(initial: RuntimeState)(using
+      Async,
       Async.Spawn
-  ): State =
+  ): RuntimeState =
     @tailrec
-    def loop(state: State): State =
-      events.read() match
-        case Right(event) =>
-          val next = handleEvent(state, event)
-          offerInputReadPermitIfReady(next)
-          if next.running then loop(next) else next
-        case Left(_) =>
-          state.copy(running = false)
+    def loop(rs: RuntimeState): RuntimeState =
+      val event: Option[CliEvent] = Async.select(
+        events.readSource.handle:
+          case Right(event) => Some(event): Option[CliEvent]
+          case Left(_)      => None
+        ,
+        shutdownPromise.handle: (_: Try[Unit]) =>
+          Some(ShutdownRequested): Option[CliEvent]
+      )
+      val next = event match
+        case None     => rs.copy(state = rs.state.copy(running = false))
+        case Some(ev) =>
+          val ctx = TransitionContext(
+            now = System.currentTimeMillis(),
+            newSpinnerWordIdx = Random.nextInt(ThinkingWords.size),
+            shouldRenderSpinner = shouldRenderSpinnerNow,
+            origin = Origin(id, threadKey, user)
+          )
+          val result = transition(rs.state, ev, ctx)
+          applyEffects(rs.copy(state = result.state), result.effects)
+      offerInputReadPermitIfReady(next.state)
+      if next.state.running then loop(next) else next
     loop(initial)
 
-  private def handleEvent(
-      state: State,
-      event: CliEvent
-  ): State =
-    event match
-      case UserInput(raw) =>
-        handleUserInput(state, raw)
-
-      case AssistantText(text) =>
-        if state.running then renderEntry(Role.Assistant, text)
-        state
-
-      case ErrorText(text) =>
-        if state.running then renderEntry(Role.Error, text)
-        state
-
-      case TurnFinished =>
-        spinnerActive.set(false)
-        spinnerTickQueued.set(false)
-        restoreTerminalEcho()
-        stopSpinner()
-        state.copy(
-          spinner = None,
-          turnInFlight = false
-        )
-
-      case SpinnerTick(now) =>
-        spinnerTickQueued.set(false)
-        state.spinner match
-          case None          => state
-          case Some(spinner) =>
-            if shouldRenderSpinner then renderSpinner(spinner, now)
-            state.copy(spinner =
-              Some(spinner.copy(frameTick = spinner.frameTick + 1))
-            )
-
-      case InputReadFailed(error) =>
-        if state.running then
-          renderEntry(
-            Role.Error,
-            s"Input reader failed: ${errorMessage(error)}"
-          )
-        state
-
-      case InputClosed | ShutdownRequested =>
-        spinnerActive.set(false)
-        spinnerTickQueued.set(false)
-        requestStop()
-        state.copy(running = false)
-
-  private def handleUserInput(
-      state: State,
-      raw: String
-  ): State =
-    val trimmed = raw.trim
-    if trimmed.isEmpty then state
-    else if QuitCommands.contains(trimmed.toLowerCase) then
-      requestStop()
-      state.copy(running = false)
-    else if state.turnInFlight then
-      renderEntry(Role.Error, "Turn already in progress. Please wait.")
-      state
-    else
-      val sent =
-        try
-          outCh.sendImmediately(
-            GatewayMessage(Origin(id, threadKey, user), raw)
-          )
-          true
-        catch
-          case _: gears.async.ChannelClosedException =>
-            requestStop()
-            false
-      if !sent then state.copy(running = false)
-      else
-        val now = System.currentTimeMillis()
-        val nextSpinner =
-          Some(
-            SpinnerState(
-              startedAtMillis = now,
-              wordStartIdx = Random.nextInt(ThinkingWords.size),
-              frameTick = 0
-            )
-          )
-        spinnerActive.set(true)
-        spinnerTickQueued.set(false)
-        nextSpinner.foreach(renderSpinner(_, now))
-        suppressTerminalEcho()
-        state.copy(
-          spinner = nextSpinner,
-          turnCount = state.turnCount + 1,
-          turnInFlight = true
-        )
+  private def applyEffects(
+      rs: RuntimeState,
+      effects: List[CliEffect]
+  )(using Async.Spawn): RuntimeState =
+    import CliEffect.*
+    effects.foldLeft(rs): (rs, effect) =>
+      effect match
+        case Render(role, text) =>
+          renderEntry(role, text)
+          rs
+        case RenderSpinner(s, now) =>
+          renderSpinner(s, now)
+          rs
+        case StopSpinner =>
+          stopSpinner()
+          rs
+        case SetEcho(enabled) =>
+          setEcho(enabled)
+          rs
+        case StartSpinnerFiber =>
+          rs.copy(spinnerFiber = Some(Future(runSpinner())))
+        case CancelSpinnerFiber =>
+          rs.spinnerFiber.foreach(_.cancel())
+          rs.copy(spinnerFiber = None)
+        case SendOutbound(msg) =>
+          try
+            outCh.sendImmediately(msg)
+            rs
+          catch
+            case _: ChannelClosedException =>
+              rs.copy(state = rs.state.copy(running = false))
 
   private def renderSpinner(spinner: SpinnerState, now: Long): Unit =
     val frame = spinnerFrameAt(spinner.frameTick)
     val elapsedMs = now - spinner.startedAtMillis
     val elapsedSec = elapsedMs / 1000.0
-    val wordIdx =
-      (spinner.wordStartIdx + (elapsedMs / ThinkingWordRotateMs).toInt) %
-        ThinkingWords.size
-    val word = ThinkingWords(wordIdx)
+    val word = selectThinkingWord(spinner.wordStartIdx, elapsedMs)
     renderStatus(f"$frame $word ($elapsedSec%.1fs)")
 
-  private def shouldRenderSpinner: Boolean =
+  private def shouldRenderSpinnerNow: Boolean =
     try !reader.isReading() || reader.getBuffer.length() == 0
-    catch case _: Throwable => true
+    catch case NonFatal(_) => true
 
   private def printGoodbye(turns: Int): Unit =
     val elapsedSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
-    val duration =
-      if elapsedSec < 60 then s"${elapsedSec}s"
-      else if elapsedSec < 3600 then s"${elapsedSec / 60}m ${elapsedSec % 60}s"
-      else s"${elapsedSec / 3600}h ${(elapsedSec % 3600) / 60}m"
+    val duration = formatDuration(elapsedSec)
     val turnsLabel = if turns == 1 then "1 turn" else s"$turns turns"
     val goodbye = rowTight(
       "✦ Goodbye".style(Style.Bold),
@@ -283,19 +217,12 @@ class CliPort(
         )
       case Role.Error =>
         ("✗ error", AttributedStyle.DEFAULT.foreground(AttributedStyle.RED))
-    val time = LocalTime.now.format(TimeFormatter)
-    val timeCol = s"$time "
-    val prefix = s"$label > "
 
-    val nonEmpty = text.linesIterator.filter(_.nonEmpty).toList
-    val lines = if nonEmpty.isEmpty then List("") else nonEmpty
-
+    val lines = prepareEntryLines(text)
     val builder = AttributedStringBuilder()
-    builder
-      .style(AttributedStyle.DEFAULT.faint)
-      .append(timeCol)
+    appendTimeColumn(builder)
       .style(style)
-      .append(prefix)
+      .append(s"$label > ")
       .style(AttributedStyle.DEFAULT)
       .append(lines.head)
       .append("\n")
@@ -303,15 +230,20 @@ class CliPort(
     reader.printAbove(builder.toAttributedString)
 
   private def userPrompt: String =
-    val time = LocalTime.now.format(TimeFormatter)
-    AttributedStringBuilder()
-      .style(AttributedStyle.DEFAULT.faint)
-      .append(s"$time ")
+    val builder = AttributedStringBuilder()
+    appendTimeColumn(builder)
       .style(userStyle)
       .append(s"› $user > ")
       .style(AttributedStyle.DEFAULT)
       .toAttributedString
       .toAnsi(terminal)
+
+  private def appendTimeColumn(
+      builder: AttributedStringBuilder
+  ): AttributedStringBuilder =
+    builder
+      .style(AttributedStyle.DEFAULT.faint)
+      .append(s"${LocalTime.now.format(TimeFormatter)} ")
 
   private def userStyle: AttributedStyle =
     AttributedStyle.DEFAULT.foreground(AttributedStyle.BLUE)
@@ -326,163 +258,57 @@ class CliPort(
         .append(text)
         .toAttributedString
       try st.update(JList.of(line))
-      catch case _: Throwable => ()
+      catch case NonFatal(_) => ()
 
   private def offerEvent(event: CliEvent): Boolean =
     try
       events.sendImmediately(event)
       true
-    catch case _: gears.async.ChannelClosedException => false
+    catch case _: ChannelClosedException => false
 
   private def offerInputReadPermitIfReady(state: State): Unit =
     if state.running && !state.turnInFlight then offerInputReadPermit()
 
   private def offerInputReadPermit(): Unit =
-    if !inputReadInProgress.get() &&
-      inputReadPermitQueued.compareAndSet(false, true)
-    then
-      try inputReadPermits.sendImmediately(())
-      catch
-        case _: gears.async.ChannelClosedException =>
-          inputReadPermitQueued.set(false)
+    try inputReadPermits.sendImmediately(())
+    catch case _: ChannelClosedException => ()
 
-  private def suppressTerminalEcho(): Unit =
-    try
-      val previous = terminal.getAttributes
-      if preTurnAttributes.compareAndSet(None, Some(previous)) then
-        val next = Attributes(previous)
-        next.setLocalFlag(Attributes.LocalFlag.ECHO, false)
-        terminal.setAttributes(next)
-    catch case _: Throwable => ()
-
-  private def restoreTerminalEcho(): Unit =
-    preTurnAttributes
-      .getAndSet(None)
-      .foreach: attributes =>
-        try terminal.setAttributes(attributes)
-        catch case _: Throwable => ()
-
-  private def requestStop(): Unit =
-    backgroundLoopsRunning.set(false)
-    spinnerActive.set(false)
-    spinnerTickQueued.set(false)
-    inputReadPermitQueued.set(false)
-    inputReadInProgress.set(false)
-    try outCh.close()
-    catch case _: Throwable => ()
-    try inputReadPermits.close()
-    catch case _: Throwable => ()
-    restoreTerminalEcho()
-    closeTerminalSafely()
+  private def setEcho(enabled: Boolean): Unit =
+    Try:
+      val current = terminal.getAttributes
+      val updated = Attributes(current)
+      updated.setLocalFlag(Attributes.LocalFlag.ECHO, enabled)
+      terminal.setAttributes(updated)
 
   private def cleanup(): Unit =
-    backgroundLoopsRunning.set(false)
-    spinnerActive.set(false)
-    spinnerTickQueued.set(false)
-    inputReadPermitQueued.set(false)
-    inputReadInProgress.set(false)
     stopSpinner()
-    try status.foreach(_.close())
-    catch case _: Throwable => ()
-    try events.close()
-    catch case _: Throwable => ()
-    try inputReadPermits.close()
-    catch case _: Throwable => ()
-    try outCh.close()
-    catch case _: Throwable => ()
-    restoreTerminalEcho()
-    try terminal.writer().flush()
-    catch case _: Throwable => ()
-    closeTerminalSafely()
+    Try(status.foreach(_.close()))
+    Try(events.close())
+    Try(inputReadPermits.close())
+    Try(outCh.close())
+    setEcho(true)
+    releaseTerminal()
 
-  private def closeTerminalSafely(): Unit =
-    if terminalOwnsStdio then
-      try terminal.writer().flush()
-      catch case _: Throwable => ()
-    else
-      try terminal.close()
-      catch case _: Throwable => ()
+  private def releaseTerminal(): Unit =
+    if terminalOwnsStdio then Try(terminal.writer().flush())
+    else Try(terminal.close())
 
 object CliPort:
   val Id: String = "cli"
-  val QuitCommands: Set[String] = Set("quit", "/quit", "exit", "/exit")
-  val SpinnerFrames: Vector[String] = Vector("(ᐢ•(ｪ)•ᐢ)", "(ᐢ-(ｪ)-ᐢ)")
-  val SpinnerBlinkEvery: Int = 14
   val SpinnerIntervalMs: Long = 100L
   val InputReadFailureBackoffMs: Long = 500L
-
-  private sealed trait CliEvent
-  private final case class UserInput(raw: String) extends CliEvent
-  private final case class AssistantText(text: String) extends CliEvent
-  private final case class ErrorText(text: String) extends CliEvent
-  private final case class SpinnerTick(nowMillis: Long) extends CliEvent
-  private final case class InputReadFailed(error: Throwable) extends CliEvent
-  private case object TurnFinished extends CliEvent
-  private case object InputClosed extends CliEvent
-  private case object ShutdownRequested extends CliEvent
-
-  /** Visual state shown while a turn is in flight. */
-  private final case class SpinnerState(
-      startedAtMillis: Long,
-      wordStartIdx: Int,
-      frameTick: Int
-  )
-
-  private final case class State(
-      running: Boolean,
-      spinner: Option[SpinnerState],
-      turnCount: Int,
-      turnInFlight: Boolean
-  )
-
-  private object State:
-    def initial: State =
-      State(
-        running = true,
-        spinner = None,
-        turnCount = 0,
-        turnInFlight = false
-      )
-
-  val ThinkingWords: Vector[String] = Vector(
-    "Splooting",
-    "Wallowing",
-    "Soaking",
-    "Basking",
-    "Munching",
-    "Nibbling",
-    "Paddling",
-    "Floating",
-    "Lounging",
-    "Ruminating",
-    "Dozing",
-    "Nuzzling",
-    "Grazing",
-    "Chomping",
-    "Marinading",
-    "Splashing",
-    "Waddling",
-    "Pondering",
-    "Dilly-dallying",
-    "Chilling"
-  )
-  val ThinkingWordRotateMs: Long = 3000L
 
   val TimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm")
 
-  def spinnerFrameAt(tick: Int): String =
-    if tick % SpinnerBlinkEvery == SpinnerBlinkEvery - 1 then SpinnerFrames(1)
-    else SpinnerFrames(0)
+  private final case class RuntimeState(
+      state: CliTransitions.State,
+      spinnerFiber: Option[Future[Unit]]
+  )
 
-  def errorMessage(error: Throwable): String =
-    Option(error.getMessage)
-      .filter(_.nonEmpty)
-      .getOrElse:
-        error.getClass.getSimpleName
-
-  enum Role:
-    case User, Assistant, Error
+  private object RuntimeState:
+    val initial: RuntimeState =
+      RuntimeState(CliTransitions.State.initial, spinnerFiber = None)
 
   private def buildTerminal(): (Terminal, Boolean) =
     val systemAttempts = Vector[() => Terminal](
