@@ -96,16 +96,6 @@ lazy val capybaraclaw = project
     run / fork := false,
     run / connectInput := true,
     Compile / mainClass := Some("capybaraclaw.main"),
-    javaOptions += {
-      val cp = (Compile / dependencyClasspath).value
-      val libJar = cp.map(_.data).find(_.getName.contains("tacit-library"))
-        .map(_.getAbsolutePath)
-        .getOrElse(sys.error(
-          "tacit-library JAR not found on the dependency classpath. " +
-          "Run `sbt lib/publishLocal` in the tacit repo first."
-        ))
-      s"-Dtacit.library.jar=$libJar"
-    },
   )
 
 lazy val root = (project in file("."))
