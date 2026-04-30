@@ -1,13 +1,20 @@
 package capybaraclaw
 
 import caseapp.*
+
 import capybaraclaw.gateway.{Gateway, JsonlContextProvider}
 import capybaraclaw.gateway.port.Port
-import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
 import capybaraclaw.gateway.port.cli.CliPort
+import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
+
 import gears.async.{Async, Future}
 import gears.async.default.given
+
+import java.io.File
+
 import language.experimental.captureChecking
+
+import scala.util.control.NonFatal
 
 /** Entrypoint of Capybara Claw.
   *
@@ -21,9 +28,7 @@ import language.experimental.captureChecking
     case ClawCaseAppExit(0) =>
       ()
     case ClawCaseAppExit(code) =>
-      throw RuntimeException(
-        s"[claw] argument parsing failed (exit code $code)"
-      )
+      sys.exit(code)
 
 @ProgName("claw")
 private final case class CliOptions(
@@ -36,7 +41,12 @@ private object ClawMain extends CaseApp[CliOptions]:
     throw ClawCaseAppExit(code)
 
   def run(options: CliOptions, remainingArgs: RemainingArgs): Unit =
-    val workDirFile = resolveWorkDir(remainingArgs.all.toList)
+    val workDirFile =
+      resolveWorkDir(remainingArgs.all.toList) match
+        case Right(file) => file
+        case Left(error) =>
+          System.err.println(error)
+          exit(1)
     val workDir = workDirFile.getPath
 
     printStartupInfo(workDir, options.enableSlack)
@@ -44,45 +54,54 @@ private object ClawMain extends CaseApp[CliOptions]:
     val contextProvider = JsonlContextProvider(workDirFile)
 
     Async.blocking:
-      val cli = CliPort(workDirFile = workDirFile)
       val slackPort: Option[SlackPort] =
         if options.enableSlack then Some(SlackPort(SlackBot.fromEnv()))
         else None
 
-      val ports: List[Port] = slackPort.toList :+ cli
-
       try
-        val gateway = Gateway(workDir, ports, contextProvider)
-        println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
-        slackPort.foreach(_.start())
-        val cliFuture = cli.start()
+        val cli = CliPort(workDirFile = workDirFile)
+        try
+          val ports: List[Port] = slackPort.toList :+ cli
+          val gateway = Gateway(workDir, ports, contextProvider)
+          println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
+          slackPort.foreach(_.start())
+          val cliFuture = cli.start()
 
-        Future:
-          try cliFuture.awaitResult
-          finally slackPort.foreach(_.shutdown())
-        gateway.run()
-      finally
-        slackPort.foreach(_.shutdown())
-        cli.shutdown()
+          Future:
+            try cliFuture.awaitResult
+            finally gateway.shutdown()
+          gateway.run()
+        finally cli.shutdown()
+      finally slackPort.foreach(_.shutdown())
 
 private final case class ClawCaseAppExit(code: Int)
     extends RuntimeException(null, null, false, false)
 
-private def resolveWorkDir(positional: List[String]): java.io.File =
+private def resolveWorkDir(
+    positional: List[String]
+): Either[String, File] =
   positional match
-    case Nil      => java.io.File(".").getCanonicalFile
-    case p :: Nil => java.io.File(p).getCanonicalFile
+    case Nil      => canonicalFile(".")
+    case p :: Nil => canonicalFile(p)
     case many     =>
-      throw IllegalArgumentException(
+      Left(
         s"[claw] expected at most one workdir, got: ${many.mkString(", ")}"
       )
 
+private def canonicalFile(path: String): Either[String, File] =
+  try Right(File(path).getCanonicalFile)
+  catch
+    case NonFatal(e) =>
+      Left(s"[claw] failed to resolve workdir '$path': ${errorMessage(e)}")
+
+private def errorMessage(e: Throwable): String =
+  Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
+
 private def printStartupInfo(workDir: String, enableSlack: Boolean): Unit =
-  val clawJsonExists = java.io.File(workDir, "claw.json").exists()
-  val clawMdExists = java.io.File(workDir, "CLAW.md").exists()
-  val logFile = java.io
-    .File(System.getProperty("user.home"), ".claw/logs/capybara.log")
-    .getPath
+  val clawJsonExists = File(workDir, "claw.json").exists()
+  val clawMdExists = File(workDir, "CLAW.md").exists()
+  val logFile =
+    File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
   println("Capybara Claw Gateway")
   println(s"  workdir  : $workDir")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
