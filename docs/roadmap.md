@@ -23,9 +23,9 @@ Support more messenger connectors in the gateway. Candidates:
 #### Improve the TUI Chat
 
 The TUI chat right now is quite rudimentary. We want to make it full-fledged with:
-- Nice TUI rendering
-- Session management
-- More slash commands
+- [x] Nice TUI rendering
+- [ ] Session management
+- [ ] More slash commands
 
 #### Context Management
 
