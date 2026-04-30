@@ -126,7 +126,7 @@ object CliTransitions:
     import CliEffect.*
     val trimmed = raw.trim
     if trimmed.isEmpty then TransitionResult(state, Nil)
-    else if isQuitCommand(trimmed) then
+    else if CliCommands.isQuit(trimmed) then
       TransitionResult(state.copy(running = false), Nil)
     else if state.turnInFlight then
       TransitionResult(
@@ -153,7 +153,6 @@ object CliTransitions:
         )
       )
 
-  val QuitCommands: Set[String] = Set("quit", "/quit", "exit", "/exit")
   val SpinnerFrames: Vector[String] = Vector("(ᐢ•(ｪ)•ᐢ)", "(ᐢ-(ｪ)-ᐢ)")
   val SpinnerBlinkEveryTicks: Int = 14
   val ThinkingWordRotateMs: Long = 3000L
@@ -201,9 +200,6 @@ object CliTransitions:
     val idx =
       (startIdx + (elapsedMs / ThinkingWordRotateMs).toInt) % ThinkingWords.size
     ThinkingWords(idx)
-
-  def isQuitCommand(input: String): Boolean =
-    QuitCommands.contains(input.trim.toLowerCase)
 
   /** Empty input returns `List("")` so callers always emit one entry line. */
   def prepareEntryLines(text: String): List[String] =

@@ -31,6 +31,7 @@ import org.jline.reader.{
   LineReaderBuilder,
   UserInterruptException
 }
+import org.jline.reader.impl.completer.StringsCompleter
 import org.jline.terminal.{Attributes, Terminal, TerminalBuilder}
 import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 
@@ -348,6 +349,7 @@ object CliPort:
       .builder()
       .appName("capybara")
       .terminal(terminal)
+      .completer(StringsCompleter(CliCommands.All.toSeq*))
       .build()
     reader.option(LineReader.Option.BRACKETED_PASTE, true)
     reader

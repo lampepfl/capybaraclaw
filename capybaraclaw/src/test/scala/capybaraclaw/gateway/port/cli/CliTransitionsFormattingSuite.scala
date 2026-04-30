@@ -23,27 +23,6 @@ class CliTransitionsFormattingSuite extends FunSuite:
     assertEquals(CliTransitions.formatDuration(7320), "2h 2m")
     assertEquals(CliTransitions.formatDuration(86400), "24h 0m")
 
-  /** isQuitCommand */
-
-  test("isQuitCommand: recognized literals"):
-    assert(CliTransitions.isQuitCommand("quit"))
-    assert(CliTransitions.isQuitCommand("/quit"))
-    assert(CliTransitions.isQuitCommand("exit"))
-    assert(CliTransitions.isQuitCommand("/exit"))
-
-  test("isQuitCommand: case-insensitive and whitespace-tolerant"):
-    assert(CliTransitions.isQuitCommand("QUIT"))
-    assert(CliTransitions.isQuitCommand("Exit"))
-    assert(CliTransitions.isQuitCommand("  quit  "))
-    assert(CliTransitions.isQuitCommand("\t/exit\n"))
-
-  test("isQuitCommand: not a quit"):
-    assert(!CliTransitions.isQuitCommand(""))
-    assert(!CliTransitions.isQuitCommand("hello"))
-    assert(!CliTransitions.isQuitCommand("quitting"))
-    assert(!CliTransitions.isQuitCommand("q"))
-    assert(!CliTransitions.isQuitCommand("quit now"))
-
   /** selectThinkingWord */
 
   test("selectThinkingWord: at t=0 returns the start word"):
