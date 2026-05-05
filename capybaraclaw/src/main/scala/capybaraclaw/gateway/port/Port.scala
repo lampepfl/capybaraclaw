@@ -19,5 +19,14 @@ trait Port:
   /** Deliver a reply to a thread previously seen on this port. */
   def send(key: ContextKey, text: String): Unit
 
+  /** Deliver an error for a turn (e.g. LLM timeout, tool failure). */
+  def sendError(key: ContextKey, text: String): Unit =
+    send(key, s"ERROR: $text")
+
+  /** Called after a turn for `key` finishes, regardless of whether it produced
+    * a reply. Ports that want to block input until a turn is done can override this.
+    */
+  def onTurnFinished(key: ContextKey): Unit = ()
+
   /** Release any resources (network connections, background listeners). */
   def shutdown(): Unit

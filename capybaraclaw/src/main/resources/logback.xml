@@ -1,0 +1,25 @@
+<configuration>
+  <property name="claw.logdir" value="${user.home}/.claw/logs"/>
+
+  <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${claw.logdir}/capybara.log</file>
+    <append>true</append>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${claw.logdir}/capybara.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+      <maxFileSize>10MB</maxFileSize>
+      <maxHistory>14</maxHistory>
+      <totalSizeCap>200MB</totalSizeCap>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{24} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.slack.api" level="ERROR"/>
+  <logger name="org.glassfish.tyrus" level="ERROR"/>
+  <logger name="capybaraclaw" level="INFO"/>
+
+  <root level="WARN">
+    <appender-ref ref="FILE"/>
+  </root>
+</configuration>

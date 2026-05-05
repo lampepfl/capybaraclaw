@@ -11,9 +11,11 @@ import com.slack.api.methods.request.users.UsersInfoRequest
 import com.slack.api.bolt.{App, AppConfig}
 import com.slack.api.bolt.socket_mode.SocketModeApp
 import com.slack.api.model.event.MessageEvent
-import gears.async.{ReadableChannel, UnboundedChannel}
+import gears.async.{ChannelClosedException, ReadableChannel, UnboundedChannel}
+import org.slf4j.LoggerFactory
 import scala.jdk.CollectionConverters.*
 import scala.collection.mutable
+import scala.util.control.NonFatal
 
 // --- ADTs ---
 
@@ -87,6 +89,7 @@ case class Message(
 // --- Client ---
 
 class SlackClient(botToken: String, appToken: String):
+  private val logger = LoggerFactory.getLogger(classOf[SlackClient])
   private val slack = Slack.getInstance()
   private val methods: MethodsClient = slack.methods(botToken)
 
@@ -203,7 +206,17 @@ class SlackClient(botToken: String, appToken: String):
             origin =
               MessageOrigin.fromChannelType(event.getChannelType, channel)
           )
-          incomingMessages.sendImmediately(msg)
+          try incomingMessages.sendImmediately(msg)
+          catch
+            case _: ChannelClosedException =>
+              logger.debug("Ignoring inbound Slack message after shutdown")
+            case NonFatal(e) =>
+              logger.error(
+                "Failed to enqueue inbound Slack message (channel={}, ts={})",
+                msg.origin.channelId,
+                msg.ts,
+                e
+              )
         ctx.ack()
       }
     )
@@ -216,7 +229,15 @@ class SlackClient(botToken: String, appToken: String):
   def messageChannel: ReadableChannel[Message] = incomingMessages.asReadable
 
   /** Shut down the Socket Mode connection. */
-  def shutdown(): Unit = socketModeApp.stop()
+  def shutdown(): Unit =
+    try incomingMessages.close()
+    catch
+      case NonFatal(e) =>
+        logger.warn("Failed to close Slack incoming message channel", e)
+    try socketModeApp.stop()
+    catch
+      case NonFatal(e) =>
+        logger.warn("Failed to stop Slack Socket Mode client", e)
 
   private def fetchChannel(id: String): Channel =
     val response = methods.conversationsInfo(

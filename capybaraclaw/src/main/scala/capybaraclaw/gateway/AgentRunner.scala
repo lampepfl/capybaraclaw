@@ -3,6 +3,7 @@ package capybaraclaw.gateway
 import capybaraclaw.agent.ClawAgent
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future, UnboundedChannel}
+import org.slf4j.LoggerFactory
 import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Message, StreamEvent}
 
@@ -20,6 +21,7 @@ class AgentRunner(
     port: Port,
     contextProvider: ContextProvider
 ):
+  private val logger = LoggerFactory.getLogger(classOf[AgentRunner])
   private val inbox = UnboundedChannel[GatewayMessage]()
 
   def deliver(msg: GatewayMessage): Unit =
@@ -41,9 +43,14 @@ class AgentRunner(
           try processTurn(msg)
           catch
             case e: Exception =>
-              System.err.println(
-                s"[runner ${key}] turn failed: ${e.getMessage}"
-              )
+              logger.error(s"[runner $key] turn failed", e)
+              try port.sendError(key, e.getMessage)
+              catch case _: Exception => ()
+          finally
+            try port.onTurnFinished(key)
+            catch
+              case e: Exception =>
+                logger.error(s"[runner $key] onTurnFinished failed", e)
         case Left(_) =>
           running = false
 
@@ -72,9 +79,7 @@ class AgentRunner(
       try port.send(key, finalText)
       catch
         case e: Exception =>
-          System.err.println(
-            s"[runner ${key}] port.send failed: ${e.getMessage}"
-          )
+          logger.error(s"[runner $key] port.send failed", e)
 
   /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the
     * active run. Persist only after a successful steer: a rejected steer (race with

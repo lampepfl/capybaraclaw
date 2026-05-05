@@ -1,54 +1,112 @@
 package capybaraclaw
 
+import caseapp.*
+
 import capybaraclaw.gateway.{Gateway, JsonlContextProvider}
 import capybaraclaw.gateway.port.Port
-import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
 import capybaraclaw.gateway.port.cli.CliPort
-import gears.async.Async
+import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
+
+import gears.async.{Async, Future}
 import gears.async.default.given
+
+import java.io.File
+
 import language.experimental.captureChecking
+
+import scala.util.control.NonFatal
 
 /** Entrypoint of Capybara Claw.
   *
   * By default, only the CLI port is enabled. Pass `--enable-slack` to additionally
   * connect to Slack (requires `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in the env).
+  * An optional positional argument sets the working directory (defaults to `.`).
   */
 @main def main(args: String*): Unit =
-  val enableSlack = args.contains("--enable-slack")
-  val unknown = args.filter(a => a.startsWith("--") && a != "--enable-slack")
-  unknown.foreach(a => System.err.println(s"[claw] unknown flag: $a"))
+  try ClawMain.main(args.toArray)
+  catch
+    case ClawCaseAppExit(0) =>
+      ()
+    case ClawCaseAppExit(code) =>
+      sys.exit(code)
 
-  val workDirFile = java.io.File(".").getCanonicalFile
-  val workDir = workDirFile.getPath
+@ProgName("claw")
+private final case class CliOptions(
+    @HelpMessage("Enable Slack Socket Mode port")
+    enableSlack: Boolean = false
+)
 
-  printStartupInfo(workDir, enableSlack)
+private object ClawMain extends CaseApp[CliOptions]:
+  override def exit(code: Int): Nothing =
+    throw ClawCaseAppExit(code)
 
-  val contextProvider = JsonlContextProvider(workDirFile)
+  def run(options: CliOptions, remainingArgs: RemainingArgs): Unit =
+    val workDirFile =
+      resolveWorkDir(remainingArgs.all.toList) match
+        case Right(file) => file
+        case Left(error) =>
+          System.err.println(error)
+          exit(1)
+    val workDir = workDirFile.getPath
 
-  Async.blocking:
-    val cli = CliPort()
-    val slackPort: Option[SlackPort] =
-      if enableSlack then Some(SlackPort(SlackBot.fromEnv())) else None
+    printStartupInfo(workDir, options.enableSlack)
 
-    val ports: List[Port] = slackPort.toList :+ cli
+    val contextProvider = JsonlContextProvider(workDirFile)
 
-    try
-      val gateway = Gateway(workDir, ports, contextProvider)
-      println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
-      slackPort.foreach(_.start())
-      cli.start()
-      gateway.run()
-    finally
-      slackPort.foreach(_.shutdown())
-      cli.shutdown()
+    Async.blocking:
+      val slackPort: Option[SlackPort] =
+        if options.enableSlack then Some(SlackPort(SlackBot.fromEnv()))
+        else None
+
+      try
+        val cli = CliPort(workDirFile = workDirFile)
+        try
+          val ports: List[Port] = slackPort.toList :+ cli
+          val gateway = Gateway(workDir, ports, contextProvider)
+          println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
+          slackPort.foreach(_.start())
+          val cliFuture = cli.start()
+
+          Future:
+            try cliFuture.awaitResult
+            finally gateway.shutdown()
+          gateway.run()
+        finally cli.shutdown()
+      finally slackPort.foreach(_.shutdown())
+
+private final case class ClawCaseAppExit(code: Int)
+    extends RuntimeException(null, null, false, false)
+
+private def resolveWorkDir(
+    positional: List[String]
+): Either[String, File] =
+  positional match
+    case Nil      => canonicalFile(".")
+    case p :: Nil => canonicalFile(p)
+    case many     =>
+      Left(
+        s"[claw] expected at most one workdir, got: ${many.mkString(", ")}"
+      )
+
+private def canonicalFile(path: String): Either[String, File] =
+  try Right(File(path).getCanonicalFile)
+  catch
+    case NonFatal(e) =>
+      Left(s"[claw] failed to resolve workdir '$path': ${errorMessage(e)}")
+
+private def errorMessage(e: Throwable): String =
+  Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
 
 private def printStartupInfo(workDir: String, enableSlack: Boolean): Unit =
-  val clawJsonExists = java.io.File(workDir, "claw.json").exists()
-  val clawMdExists = java.io.File(workDir, "CLAW.md").exists()
+  val clawJsonExists = File(workDir, "claw.json").exists()
+  val clawMdExists = File(workDir, "CLAW.md").exists()
+  val logFile =
+    File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
   println("Capybara Claw Gateway")
   println(s"  workdir  : $workDir")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
+  println(s"  logs     : $logFile")
   println(s"  slack    : ${
       if enableSlack then "enabled"
       else "disabled (pass --enable-slack to enable)"
