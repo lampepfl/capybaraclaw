@@ -1,0 +1,6 @@
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  role TEXT NOT NULL,
+  text TEXT NOT NULL
+);

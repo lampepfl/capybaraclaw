@@ -17,6 +17,7 @@
 
   <logger name="com.slack.api" level="ERROR"/>
   <logger name="org.glassfish.tyrus" level="ERROR"/>
+  <logger name="org.flywaydb" level="INFO"/>
   <logger name="capybaraclaw" level="INFO"/>
 
   <root level="WARN">
