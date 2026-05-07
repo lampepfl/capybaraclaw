@@ -117,7 +117,8 @@ class Gateway(workDir: String, ports: List[Port], contextProvider: ContextProvid
   def shutdown(): Unit
 ```
 
-Mid-turn messages are forwarded to the active `AgentRun` via `steer`. `JsonlContextProvider` persists transcripts to `.claw/history/{port}/{thread}.jsonl`. 
+Mid-turn messages are forwarded to the active `AgentRun` via `steer`. `SqliteContextProvider` persists session-native transcripts to `.claw/state.db`. The database stores one row per `(port, thread)` in `sessions`, ordered text turns in `messages`, and an FTS5 index in `messages_fts`; only user and assistant text content is persisted. Existing `.claw/history/**/*.jsonl` files are archival and are not read by the gateway.
+
+Schema is managed by Flyway; migrations live as plain SQL under `capybaraclaw/src/main/resources/db/migration/V*.sql` and are applied automatically on startup. The provider holds **one writer connection** for all writes plus a **pool of read-only connections** so reads do not serialise behind the writer. Writes are serialised via `writeLock`; reads run unsynchronised on pool connections in WAL mode.
 
 Current ports: `SlackPort` (in `port.slack`) and `CliPort` (in `port.cli`).
-

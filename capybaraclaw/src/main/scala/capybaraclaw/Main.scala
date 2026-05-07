@@ -2,10 +2,11 @@ package capybaraclaw
 
 import caseapp.*
 
-import capybaraclaw.gateway.{Gateway, JsonlContextProvider}
+import capybaraclaw.gateway.Gateway
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.CliPort
 import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
+import capybaraclaw.gateway.sqlite.SqliteContextProvider
 
 import gears.async.{Async, Future}
 import gears.async.default.given
@@ -14,6 +15,7 @@ import java.io.File
 
 import language.experimental.captureChecking
 
+import scala.util.Using
 import scala.util.control.NonFatal
 
 /** Entrypoint of Capybara Claw.
@@ -51,16 +53,14 @@ private object ClawMain extends CaseApp[CliOptions]:
 
     printStartupInfo(workDir, options.enableSlack)
 
-    val contextProvider = JsonlContextProvider(workDirFile)
-
-    Async.blocking:
-      val slackPort: Option[SlackPort] =
-        if options.enableSlack then Some(SlackPort(SlackBot.fromEnv()))
-        else None
-
-      try
-        val cli = CliPort(workDirFile = workDirFile)
-        try
+    Using
+      .Manager: use =>
+        val contextProvider = use(SqliteContextProvider(workDirFile))
+        Async.blocking:
+          val slackPort: Option[SlackPort] =
+            if options.enableSlack then Some(use(SlackPort(SlackBot.fromEnv())))
+            else None
+          val cli = use(CliPort(workDirFile = workDirFile))
           val ports: List[Port] = slackPort.toList :+ cli
           val gateway = Gateway(workDir, ports, contextProvider)
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
@@ -71,8 +71,7 @@ private object ClawMain extends CaseApp[CliOptions]:
             try cliFuture.awaitResult
             finally gateway.shutdown()
           gateway.run()
-        finally cli.shutdown()
-      finally slackPort.foreach(_.shutdown())
+      .get
 
 private final case class ClawCaseAppExit(code: Int)
     extends RuntimeException(null, null, false, false)

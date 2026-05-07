@@ -83,6 +83,8 @@ lazy val capybaraclaw = project
       "org.jline" % "jline-terminal-jni" % "4.0.12",
       "xyz.matthieucourt" %% "layoutz" % "0.7.0",
       "com.github.alexarchambault" %% "case-app" % "2.1.0",
+      "org.xerial" % "sqlite-jdbc" % "3.53.0.0",
+      "org.flywaydb" % "flyway-core" % "12.4.0",
       "lampepfl" %% "tacit" % tacitVersion,
       ("lampepfl" %% "tacit-library" % tacitLibraryVersion)
         .excludeAll(ExclusionRule(organization = "*", name = "*")),

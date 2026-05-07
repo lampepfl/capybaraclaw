@@ -9,7 +9,7 @@ import gears.async.ReadableChannel
   * send replies back. The Gateway pumps `incoming` into per-thread agent runners and
   * calls `send` when a runner produces a reply for this port's threads.
   */
-trait Port:
+trait Port extends AutoCloseable:
   /** Unique identifier for this port, used as `Origin.port` on inbound messages. */
   def id: String
 
@@ -30,3 +30,5 @@ trait Port:
 
   /** Release any resources (network connections, background listeners). */
   def shutdown(): Unit
+
+  override def close(): Unit = shutdown()
