@@ -1,0 +1,6 @@
+{
+  "provider": "ollama",
+  "model": "gemma4:e4b",
+  "max_tokens": 16000,
+  "classified_paths": ["emails/", "CLAW.md", "claw.json"]
+}
