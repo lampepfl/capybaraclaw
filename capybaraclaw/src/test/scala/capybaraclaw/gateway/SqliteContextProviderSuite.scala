@@ -1,30 +1,55 @@
 package capybaraclaw.gateway
 
 import capybaraclaw.gateway.sqlite.SqliteContextProvider
+import capybaraclaw.gateway.port.slack.SlackPort
 import tacit.agents.llm.endpoint.{Content, Message, Role}
 
 import java.nio.file.{Files, Path}
 import java.sql.{Connection, DriverManager, ResultSet}
+import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
+import scala.jdk.CollectionConverters.*
 
 class SqliteContextProviderSuite extends munit.FunSuite:
 
-  test("load on a fresh key returns empty without creating a session"):
+  private val WD = "/tmp/test"
+  private val OtherWD = "/tmp/other"
+  private def handle(value: String): SessionHandle =
+    SessionHandle(SlackPort.Id, value)
+
+  test("load on a fresh session UUID returns empty without creating a session"):
     withProvider(): (provider, dbPath) =>
-      val key = ContextKey("cli", "default")
-      assertEquals(provider.load(key), Nil)
+      assertEquals(provider.load(SessionId.random()), Nil)
 
       withConnection(dbPath): conn =>
         assertEquals(queryInt(conn, "SELECT COUNT(*) FROM sessions"), 0)
 
-  test("append then load preserves message order"):
+  test("createSession inserts metadata"):
+    withProvider(): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+
+      assert(provider.resumeSession(sessionId).isDefined)
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          """SELECT id, workdir, created_at, last_activity
+            |FROM sessions WHERE id = ?""".stripMargin,
+          List(sessionId.value)
+        )
+        assertEquals(rows.size, 1)
+        assertEquals(rows.head(0), sessionId.value)
+        assertEquals(rows.head(1), WD)
+        assertEquals(rows.head(2), rows.head(3))
+        assertEquals(queryInt(conn, "SELECT COUNT(*) FROM session_handles"), 0)
+
+  test("append then load by UUID preserves message order"):
     withProvider(): (provider, _) =>
-      val key = ContextKey("cli", "default")
-      provider.append(key, Message.user("first"))
-      provider.append(key, Message.assistant("second"))
-      provider.append(key, Message.user("third"))
+      val sessionId = provider.createSession(WD)
+      provider.append(sessionId, Message.user("first"))
+      provider.append(sessionId, Message.assistant("second"))
+      provider.append(sessionId, Message.user("third"))
 
       assertEquals(
-        provider.load(key).map(m => m.role -> m.text),
+        provider.load(sessionId).map(m => m.role -> m.text),
         List(
           Role.User -> "first",
           Role.Assistant -> "second",
@@ -32,26 +57,142 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         )
       )
 
-  test("keeps separate histories for different port and thread pairs"):
+  test("keeps separate histories for different sessionIds"):
     withProvider(): (provider, _) =>
-      val cli = ContextKey("cli", "same-thread")
-      val slack = ContextKey("slack", "same-thread")
-      val otherThread = ContextKey("cli", "other-thread")
+      val a = provider.createSession(WD)
+      val b = provider.createSession(WD)
+      val c = provider.createSession(WD)
+      provider.append(a, Message.user("alpha message"))
+      provider.append(b, Message.user("beta message"))
+      provider.append(c, Message.assistant("gamma message"))
 
-      provider.append(cli, Message.user("cli message"))
-      provider.append(slack, Message.user("slack message"))
-      provider.append(otherThread, Message.assistant("other message"))
+      assertEquals(provider.load(a).map(_.text), List("alpha message"))
+      assertEquals(provider.load(b).map(_.text), List("beta message"))
+      assertEquals(provider.load(c).map(_.text), List("gamma message"))
 
-      assertEquals(provider.load(cli).map(_.text), List("cli message"))
-      assertEquals(provider.load(slack).map(_.text), List("slack message"))
-      assertEquals(
-        provider.load(otherThread).map(_.text),
-        List("other message")
+  test(
+    "touchSession preserves created_at and bumps last_activity"
+  ):
+    withProvider(): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+      Thread.sleep(10)
+      provider.touchSession(sessionId)
+
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          """SELECT workdir, created_at, last_activity
+            |FROM sessions WHERE id = ?""".stripMargin,
+          List(sessionId.value)
+        )
+        assertEquals(rows.size, 1)
+        val row = rows.head
+        assertEquals(row(0), WD, "workdir preserved")
+        assertNotEquals(
+          row(1),
+          row(2),
+          "last_activity advanced past created_at"
+        )
+
+  test(
+    "touchSession fails when the session UUID does not exist"
+  ):
+    withProvider(): (provider, _) =>
+      val missing = SessionId.random()
+
+      val error = intercept[IllegalArgumentException]:
+        provider.touchSession(missing)
+
+      assert(
+        error.getMessage.contains(missing.value),
+        s"error should mention the missing session id, got: ${error.getMessage}"
       )
+
+  test("resolveOrCreateHandle tolerates concurrent first writers"):
+    val dir = Files.createTempDirectory("claw-concurrent-first-handle")
+    val providerA = SqliteContextProvider(dir)
+    try
+      val providerB = SqliteContextProvider(dir)
+      try
+        val start = CountDownLatch(1)
+        val results = ConcurrentLinkedQueue[SessionId]()
+        val errors = ConcurrentLinkedQueue[Throwable]()
+        val sharedHandle = handle("first-writer-race")
+        val workers: List[Thread] = List(providerA, providerB).map: provider =>
+          Thread(
+            new Runnable:
+              def run(): Unit =
+                start.await()
+                try
+                  results.offer(
+                    provider.resolveOrCreateHandle(WD, sharedHandle)
+                  )
+                  ()
+                catch
+                  case e: Throwable =>
+                    errors.offer(e)
+                    ()
+          )
+
+        workers.foreach(_.start())
+        start.countDown()
+        workers.foreach(_.join())
+
+        assertEquals(
+          errors.size(),
+          0,
+          errors.iterator().asScala.toList.map(_.toString).mkString("\n")
+        )
+        assertEquals(results.iterator().asScala.toList.distinct.size, 1)
+      finally providerB.close()
+    finally providerA.close()
+
+  test("resolveOrCreateHandle returns existing UUID or creates a new UUID"):
+    withProvider(): (provider, _) =>
+      val first = provider.resolveOrCreateHandle(WD, handle("C1"))
+      val second = provider.resolveOrCreateHandle(WD, handle("C1"))
+      val third = provider.resolveOrCreateHandle(WD, handle("C2"))
+
+      assertEquals(second, first)
+      assertNotEquals(third, first)
+      assert(provider.resumeSession(first).exists(_.workdir == WD))
+
+  test("same Slack local id in different workdirs creates two UUIDs"):
+    withProvider(): (provider, dbPath) =>
+      val a = provider.resolveOrCreateHandle(WD, handle("shared"))
+      val b = provider.resolveOrCreateHandle(OtherWD, handle("shared"))
+      provider.append(a, Message.user("from a"))
+      provider.append(b, Message.user("from b"))
+
+      assertEquals(provider.load(a).map(_.text), List("from a"))
+      assertEquals(provider.load(b).map(_.text), List("from b"))
+
+      withConnection(dbPath): conn =>
+        assertEquals(queryInt(conn, "SELECT COUNT(*) FROM sessions"), 2)
+
+  test("UNIQUE constraint rejects a duplicate handle in the same workdir"):
+    withProvider(): (provider, dbPath) =>
+      val first = provider.resolveOrCreateHandle(WD, handle("shared"))
+      val second = provider.createSession(WD)
+      withConnection(dbPath): conn =>
+        val sql =
+          """INSERT INTO session_handles(session_id, workdir, kind, value)
+            |VALUES (?, ?, ?, ?)""".stripMargin
+        val stmt = conn.prepareStatement(sql)
+        try
+          stmt.setString(1, second.value)
+          stmt.setString(2, WD)
+          stmt.setString(3, "slack")
+          stmt.setString(4, "shared")
+          intercept[java.sql.SQLException]:
+            stmt.executeUpdate()
+        finally stmt.close()
+
+      assertEquals(provider.resolveOrCreateHandle(WD, handle("shared")), first)
 
   test("persists only user and assistant text messages"):
     withProvider(): (provider, _) =>
-      val key = ContextKey("cli", "default")
+      val sessionId = provider.createSession(WD)
       val skipped = List(
         Message.system("system prompt"),
         Message(Role.Assistant, List(Content.Thinking("private thought"))),
@@ -60,12 +201,12 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         Message(Role.User, List(Content.Text("")))
       )
 
-      skipped.foreach(provider.append(key, _))
-      provider.append(key, Message.user("visible user"))
-      provider.append(key, Message.assistant("visible assistant"))
+      skipped.foreach(provider.append(sessionId, _))
+      provider.append(sessionId, Message.user("visible user"))
+      provider.append(sessionId, Message.assistant("visible assistant"))
 
       assertEquals(
-        provider.load(key).map(m => m.role -> m.text),
+        provider.load(sessionId).map(m => m.role -> m.text),
         List(
           Role.User -> "visible user",
           Role.Assistant -> "visible assistant"
@@ -74,15 +215,15 @@ class SqliteContextProviderSuite extends munit.FunSuite:
 
   test("messages FTS matches persisted text"):
     withProvider(): (provider, dbPath) =>
-      val key = ContextKey("cli", "default")
+      val sessionId = provider.createSession(WD)
       provider.append(
-        key,
+        sessionId,
         Message.user("sqlite can search capybara transcripts")
       )
-      provider.append(key, Message.assistant("ordinary response"))
+      provider.append(sessionId, Message.assistant("ordinary response"))
 
       withConnection(dbPath): conn =>
-        val matches = queryPreparedRows(
+        val matches = queryRowsPrepared(
           conn,
           """SELECT m.text
             |FROM messages_fts
@@ -98,36 +239,39 @@ class SqliteContextProviderSuite extends munit.FunSuite:
 
   test("operations after close fail fast instead of hanging"):
     val dir = Files.createTempDirectory("claw-after-close")
-    val provider = SqliteContextProvider(dir.toFile)
+    val provider = SqliteContextProvider(dir)
     provider.close()
     intercept[IllegalStateException]:
-      provider.load(ContextKey("cli", "default"))
+      provider.load(SessionId.random())
     intercept[Exception]:
-      provider.append(ContextKey("cli", "default"), Message.user("hi"))
+      provider.append(SessionId.random(), Message.user("hi"))
 
   test("close is idempotent"):
     val dir = Files.createTempDirectory("claw-close-twice")
-    val provider = SqliteContextProvider(dir.toFile)
+    val provider = SqliteContextProvider(dir)
     provider.close()
     provider.close() // must not throw
 
   test(
-    "concurrent providers in one workdir do not deadlock or violate uniqueness"
+    "concurrent providers in same baseDir do not deadlock or violate uniqueness"
   ):
     val dir = Files.createTempDirectory("claw-multi-instance")
-    val providerA = SqliteContextProvider(dir.toFile)
+    val providerA = SqliteContextProvider(dir)
     try
-      val providerB = SqliteContextProvider(dir.toFile)
+      val providerB = SqliteContextProvider(dir)
       try
-        val key = ContextKey("cli", "shared")
+        val sessionId =
+          providerA.resolveOrCreateHandle(WD, handle("shared"))
 
         val threadA = new Thread(() =>
           (1 to 5).foreach: i =>
-            providerA.append(key, Message.user(s"a-$i"))
+            providerA.touchSession(sessionId)
+            providerA.append(sessionId, Message.user(s"a-$i"))
         )
         val threadB = new Thread(() =>
           (1 to 5).foreach: i =>
-            providerB.append(key, Message.user(s"b-$i"))
+            providerB.touchSession(sessionId)
+            providerB.append(sessionId, Message.user(s"b-$i"))
         )
 
         threadA.start()
@@ -135,7 +279,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         threadA.join()
         threadB.join()
 
-        val combined = providerA.load(key).map(_.text).toSet
+        val combined = providerA.load(sessionId).map(_.text).toSet
         assertEquals(
           combined,
           (1 to 5).flatMap(i => List(s"a-$i", s"b-$i")).toSet
@@ -146,8 +290,8 @@ class SqliteContextProviderSuite extends munit.FunSuite:
   private def withProvider(
   )(body: (SqliteContextProvider, Path) => Unit): Unit =
     val dir = Files.createTempDirectory("claw-sqlite-provider")
-    val dbPath = dir.resolve(".claw").resolve("state.db")
-    val provider = SqliteContextProvider(dir.toFile)
+    val dbPath = dir.resolve("state.db")
+    val provider = SqliteContextProvider(dir)
     try body(provider, dbPath)
     finally provider.close()
 
@@ -164,7 +308,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
     try collectRows(stmt.executeQuery())
     finally stmt.close()
 
-  private def queryPreparedRows(
+  private def queryRowsPrepared(
       conn: Connection,
       sql: String,
       values: List[String]

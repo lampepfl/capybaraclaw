@@ -3,7 +3,20 @@ import language.experimental.captureChecking
 
 import gears.async.ReadableChannel
 
-class SlackBot(botToken: String, appToken: String):
+trait SlackApi:
+  def sendMessage(
+      channel: String,
+      text: String,
+      threadTs: Option[String] = None
+  ): String
+
+  def readHistory(channel: String, limit: Int = 32): List[Message]
+  def getChannel(id: String): Channel
+  def getUser(id: String): User
+  def messageChannel: ReadableChannel[Message]
+  def shutdown(): Unit
+
+class SlackBot(botToken: String, appToken: String) extends SlackApi:
   val client: SlackClient = SlackClient(botToken, appToken)
 
   def sendMessage(

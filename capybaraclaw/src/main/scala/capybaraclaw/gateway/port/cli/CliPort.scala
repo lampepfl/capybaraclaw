@@ -1,7 +1,13 @@
 package capybaraclaw.gateway.port.cli
 
 import capybaraclaw.agent.AgentConfig
-import capybaraclaw.gateway.{ContextKey, GatewayMessage, Origin}
+import capybaraclaw.gateway.{
+  GatewayMessage,
+  Origin,
+  PortId,
+  SessionId,
+  SessionRef
+}
 import capybaraclaw.gateway.port.Port
 
 import gears.async.AsyncOperations.sleep
@@ -37,9 +43,10 @@ import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 
 /** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
-    override val id: String = CliPort.Id,
+    override val id: PortId = CliPort.Id,
     user: String = sys.env.getOrElse("USER", "cli"),
-    workDirFile: File = java.io.File(".").getCanonicalFile
+    workDirFile: File = java.io.File(".").getCanonicalFile,
+    sessionId: SessionId
 ) extends Port:
   import CliPort.*
   import CliTransitions.*
@@ -56,7 +63,6 @@ class CliPort(
   private val status: Option[Status] =
     if terminalOwnsStdio then None else Option(Status.getStatus(terminal, true))
 
-  private val threadKey: String = "stdin"
   private val sessionStartMillis = System.currentTimeMillis()
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
@@ -73,13 +79,17 @@ class CliPort(
         printGoodbye(finalState.turnCount)
       finally cleanup()
 
-  def send(key: ContextKey, text: String): Unit =
+  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
     offerEvent(AssistantText(text))
 
-  override def sendError(key: ContextKey, text: String): Unit =
+  override def sendError(
+      sessionId: SessionId,
+      origin: Origin,
+      text: String
+  ): Unit =
     offerEvent(ErrorText(text))
 
-  override def onTurnFinished(key: ContextKey): Unit =
+  override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
   def shutdown(): Unit =
@@ -135,7 +145,11 @@ class CliPort(
             now = System.currentTimeMillis(),
             newSpinnerWordIdx = Random.nextInt(ThinkingWords.size),
             shouldRenderSpinner = shouldRenderSpinnerNow,
-            origin = Origin(id, threadKey, user)
+            origin = Origin(
+              port = id,
+              user = user,
+              session = SessionRef.Direct(sessionId)
+            )
           )
           val result = transition(rs.state, ev, ctx)
           applyEffects(rs.copy(state = result.state), result.effects)
@@ -295,7 +309,7 @@ class CliPort(
     else Try(terminal.close())
 
 object CliPort:
-  val Id: String = "cli"
+  val Id: PortId = PortId("cli")
   val SpinnerIntervalMs: Long = 100L
   val InputReadFailureBackoffMs: Long = 500L
 

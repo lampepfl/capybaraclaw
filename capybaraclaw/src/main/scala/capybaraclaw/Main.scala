@@ -2,7 +2,7 @@ package capybaraclaw
 
 import caseapp.*
 
-import capybaraclaw.gateway.Gateway
+import capybaraclaw.gateway.{Gateway, SessionId}
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.CliPort
 import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
@@ -51,16 +51,20 @@ private object ClawMain extends CaseApp[CliOptions]:
           exit(1)
     val workDir = workDirFile.getPath
 
-    printStartupInfo(workDir, options.enableSlack)
-
     Using
       .Manager: use =>
-        val contextProvider = use(SqliteContextProvider(workDirFile))
+        val contextProvider = use(SqliteContextProvider())
         Async.blocking:
           val slackPort: Option[SlackPort] =
             if options.enableSlack then Some(use(SlackPort(SlackBot.fromEnv())))
             else None
-          val cli = use(CliPort(workDirFile = workDirFile))
+          val sessionId = contextProvider.createSession(workDir)
+
+          printStartupInfo(workDir, options.enableSlack, sessionId)
+
+          val cli = use(
+            CliPort(workDirFile = workDirFile, sessionId = sessionId)
+          )
           val ports: List[Port] = slackPort.toList :+ cli
           val gateway = Gateway(workDir, ports, contextProvider)
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
@@ -96,12 +100,17 @@ private def canonicalFile(path: String): Either[String, File] =
 private def errorMessage(e: Throwable): String =
   Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
 
-private def printStartupInfo(workDir: String, enableSlack: Boolean): Unit =
+private def printStartupInfo(
+    workDir: String,
+    enableSlack: Boolean,
+    sessionId: SessionId
+): Unit =
   val clawJsonExists = File(workDir, "claw.json").exists()
   val clawMdExists = File(workDir, "CLAW.md").exists()
   val logFile =
     File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
   println("Capybara Claw Gateway")
+  println(s"  session  : ${sessionId.value}")
   println(s"  workdir  : $workDir")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")

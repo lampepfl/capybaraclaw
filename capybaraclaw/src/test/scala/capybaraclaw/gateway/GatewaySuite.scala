@@ -2,6 +2,8 @@ package capybaraclaw.gateway
 
 import capybaraclaw.agent.ClawAgent
 import capybaraclaw.gateway.port.Port
+import capybaraclaw.gateway.port.cli.CliPort
+import capybaraclaw.gateway.port.slack.SlackPort
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import gears.async.default.given
 import tacit.agents.llm.endpoint.{
@@ -16,6 +18,9 @@ import tacit.agents.llm.endpoint.{
   StreamEvent
 }
 import tacit.agents.utils.Result
+import java.nio.charset.StandardCharsets
+import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.{
   ConcurrentLinkedQueue,
   LinkedBlockingQueue,
@@ -27,6 +32,17 @@ import scala.jdk.CollectionConverters.*
 // --- Test doubles ---
 
 object FakePort:
+  final case class Reply(
+      sessionId: SessionId,
+      handle: Option[SessionHandle],
+      text: String
+  )
+
+  private def replyHandle(origin: Origin): Option[SessionHandle] =
+    origin.session match
+      case SessionRef.External(handle) => Some(handle)
+      case SessionRef.Direct(_)        => None
+
   /** Longer waits when `CAPYBARACLAW_CI` is `1` or `true` (e.g. GitHub Actions). */
   def defaultReplyTimeoutMs: Long =
     sys.env.get("CAPYBARACLAW_CI") match
@@ -57,15 +73,40 @@ class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
     else ch.sendImmediately(Left(LLMError("No more stub responses")))
     ch.asReadable
 
+class RejectingPort(override val id: PortId) extends FakePort(id):
+  override def validateOriginForReply(origin: Origin): Unit =
+    throw IllegalArgumentException("invalid reply origin")
+
+class DeltaThenDoneEndpoint(response: ChatResponse) extends Endpoint:
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] =
+    Right(response)
+
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
+    ch.sendImmediately(Right(StreamEvent.Delta("partial")))
+    ch.sendImmediately(Right(StreamEvent.Done(response)))
+    ch.asReadable
+
 /** In-memory Port that lets tests push inbound messages and capture outbound replies. */
-class FakePort(override val id: String) extends Port:
+class FakePort(override val id: PortId) extends Port:
   private val inCh = UnboundedChannel[GatewayMessage]()
-  private val sentReplies = LinkedBlockingQueue[(ContextKey, String)]()
+  private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
+  private val finishedTurns = LinkedBlockingQueue[SessionId]()
 
   def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
 
-  def send(key: ContextKey, text: String): Unit =
-    sentReplies.put((key, text))
+  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
+    sentReplies.put(
+      FakePort.Reply(sessionId, FakePort.replyHandle(origin), text)
+    )
+
+  override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
+    finishedTurns.put(sessionId)
 
   def shutdown(): Unit =
     try inCh.close()
@@ -76,42 +117,136 @@ class FakePort(override val id: String) extends Port:
 
   def nextReply(
       timeoutMs: Long = FakePort.defaultReplyTimeoutMs
-  ): (ContextKey, String) =
+  ): FakePort.Reply =
     val got = sentReplies.poll(timeoutMs, TimeUnit.MILLISECONDS)
     if got == null then
       throw new AssertionError(s"No reply within ${timeoutMs}ms")
     got
 
+  def nextFinished(
+      timeoutMs: Long = FakePort.defaultReplyTimeoutMs
+  ): SessionId =
+    val got = finishedTurns.poll(timeoutMs, TimeUnit.MILLISECONDS)
+    if got == null then
+      throw new AssertionError(s"No turn finish within ${timeoutMs}ms")
+    got
+
 /** In-memory `ContextProvider` for assertions on the persisted transcript order. */
 class FakeContextProvider(
-    seeds: Map[ContextKey, List[Message]] = Map.empty
+    seeds: Map[SessionId, List[Message]] = Map.empty
 ) extends ContextProvider:
   private val store =
-    scala.collection.concurrent.TrieMap[ContextKey, List[Message]]()
-  private val appendLog = ConcurrentLinkedQueue[(ContextKey, Message)]()
-  seeds.foreach { case (k, v) => store.update(k, v) }
+    scala.collection.concurrent.TrieMap[SessionId, List[Message]]()
+  private val sessions =
+    scala.collection.concurrent.TrieMap[SessionId, SessionMetadata]()
+  private val handles =
+    scala.collection.concurrent.TrieMap[
+      (String, SessionHandle),
+      SessionId
+    ]()
+  private val appendLog = ConcurrentLinkedQueue[(SessionId, Message)]()
+  private val lock = new Object
+  seeds.foreach { case (k, v) =>
+    store.update(k, v)
+    sessions.update(k, metadata(k, "."))
+  }
 
-  def load(key: ContextKey): List[Message] = store.getOrElse(key, Nil)
+  def createSession(workdir: String): SessionId =
+    lock.synchronized:
+      val sessionId = SessionId.random()
+      sessions.update(sessionId, metadata(sessionId, workdir))
+      sessionId
 
-  def append(key: ContextKey, msg: Message): Unit =
-    store.updateWith(key) {
+  def resumeSession(id: SessionId): Option[SessionMetadata] =
+    sessions.get(id)
+
+  def resolveOrCreateHandle(
+      workdir: String,
+      handle: SessionHandle
+  ): SessionId =
+    lock.synchronized:
+      handles.get((workdir, handle)) match
+        case Some(sessionId) => sessionId
+        case None            =>
+          val sessionId = deterministicSessionId(workdir, handle)
+          sessions.update(sessionId, metadata(sessionId, workdir))
+          handles.update((workdir, handle), sessionId)
+          sessionId
+
+  def touchSession(sessionId: SessionId): Unit =
+    if !sessions.contains(sessionId) then
+      throw IllegalArgumentException(s"session not found: ${sessionId.value}")
+
+  def load(sessionId: SessionId): List[Message] =
+    store.getOrElse(sessionId, Nil)
+
+  def append(sessionId: SessionId, msg: Message): Unit =
+    store.updateWith(sessionId) {
       case Some(xs) => Some(xs :+ msg)
       case None     => Some(List(msg))
     }
-    appendLog.offer((key, msg))
+    appendLog.offer((sessionId, msg))
 
-  def log: List[(ContextKey, Message)] = appendLog.iterator.asScala.toList
+  def log: List[(SessionId, Message)] = appendLog.iterator.asScala.toList
+
+  private def metadata(
+      sessionId: SessionId,
+      workdir: String
+  ): SessionMetadata =
+    val now = Instant.now
+    SessionMetadata(sessionId, workdir, now, now)
+
+  private def deterministicSessionId(
+      workdir: String,
+      handle: SessionHandle
+  ): SessionId =
+    val raw = s"$workdir\u0000${handle.kind}\u0000${handle.value}"
+    SessionId(
+      UUID
+        .nameUUIDFromBytes(raw.getBytes(StandardCharsets.UTF_8))
+        .toString
+    )
 
 // --- Helpers ---
 
 def textResponse(text: String): ChatResponse =
   ChatResponse(Message.assistant(text), FinishReason.Stop)
 
+def toolCallResponse(calls: (String, String, String)*): ChatResponse =
+  val content = calls.map: (id, name, input) =>
+    Content.ToolUse(id, name, input)
+  ChatResponse(Message(Role.Assistant, content.toList), FinishReason.ToolUse)
+
 // --- Tests ---
 
 class GatewaySuite extends munit.FunSuite:
 
   private def workDir: String = java.io.File(".").getCanonicalFile.getPath
+  private def sid(
+      localId: String,
+      wd: String = workDir,
+      port: String = "slack"
+  ): SessionId =
+    val raw = s"$wd\u0000$port\u0000$localId"
+    SessionId(
+      UUID
+        .nameUUIDFromBytes(raw.getBytes(StandardCharsets.UTF_8))
+        .toString
+    )
+  private def handle(localId: String): SessionHandle =
+    SessionHandle(SlackPort.Id, localId)
+  private def externalOrigin(
+      port: PortId,
+      user: String,
+      localId: String
+  ): Origin =
+    Origin(port, user, SessionRef.External(handle(localId)))
+  private def directOrigin(
+      port: PortId,
+      user: String,
+      sessionId: SessionId
+  ): Origin =
+    Origin(port, user, SessionRef.Direct(sessionId))
 
   private def runGateway(
       ports: List[Port],
@@ -119,7 +254,8 @@ class GatewaySuite extends munit.FunSuite:
       endpointFactory: () => Endpoint,
       created: AtomicInteger,
       historySeen: ConcurrentLinkedQueue[List[Message]] =
-        ConcurrentLinkedQueue()
+        ConcurrentLinkedQueue(),
+      gatewayWorkDir: String = workDir
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     val factory: (String, List[Message]) => ClawAgent = (wd, hist) =>
       created.incrementAndGet()
@@ -131,16 +267,16 @@ class GatewaySuite extends munit.FunSuite:
       )
 
     Async.blocking:
-      val gateway = Gateway(workDir, ports, cp, factory)
+      val gateway = Gateway(gatewayWorkDir, ports, cp, factory)
       val gwFut = Future(gateway.run())
       try body(gateway)
       finally
         gateway.shutdown()
         gwFut.awaitResult
 
-  test("routes same (port, thread) to one runner across multiple users"):
+  test("routes same Slack handle to one runner across multiple users"):
     val cp = FakeContextProvider()
-    val port = FakePort("slack")
+    val port = FakePort(SlackPort.Id)
     val created = AtomicInteger(0)
     runGateway(
       List(port),
@@ -149,8 +285,8 @@ class GatewaySuite extends munit.FunSuite:
         () => StubEndpoint(List(textResponse("hi"), textResponse("yes"))),
       created = created
     ) { _ =>
-      val origin1 = Origin("slack", "C1", "U_alice")
-      val origin2 = Origin("slack", "C1", "U_bob")
+      val origin1 = externalOrigin(SlackPort.Id, "U_alice", "C1")
+      val origin2 = externalOrigin(SlackPort.Id, "U_bob", "C1")
       port.push(GatewayMessage(origin1, "ping"))
       val reply1 = port.nextReply()
       port.push(GatewayMessage(origin2, "pong"))
@@ -159,13 +295,17 @@ class GatewaySuite extends munit.FunSuite:
       assertEquals(
         created.get,
         1,
-        "Only one ClawAgent should be created for one thread"
+        "Only one ClawAgent should be created for one session"
       )
-      assertEquals(reply1, (ContextKey("slack", "C1"), "hi"))
-      assertEquals(reply2, (ContextKey("slack", "C1"), "yes"))
+      assertEquals(reply1.handle, Some(handle("C1")))
+      assertEquals(reply1.text, "hi")
+      assertEquals(reply2.handle, Some(handle("C1")))
+      assertEquals(reply2.text, "yes")
+      assertEquals(reply1.sessionId, reply2.sessionId)
 
-      val key = ContextKey("slack", "C1")
-      val persisted = cp.log.collect { case (k, m) if k == key => m }
+      val persisted = cp.log.collect {
+        case (sessionId, m) if sessionId == sid("C1") => m
+      }
       assertEquals(persisted.size, 4)
       assertEquals(persisted(0).role, Role.User)
       assertEquals(persisted(0).text, "[U_alice] ping")
@@ -177,9 +317,9 @@ class GatewaySuite extends munit.FunSuite:
       assertEquals(persisted(3).text, "yes")
     }
 
-  test("distinct threads spawn distinct runners"):
+  test("distinct Slack handles spawn distinct runners"):
     val cp = FakeContextProvider()
-    val port = FakePort("slack")
+    val port = FakePort(SlackPort.Id)
     val created = AtomicInteger(0)
     runGateway(
       List(port),
@@ -187,22 +327,66 @@ class GatewaySuite extends munit.FunSuite:
       endpointFactory = () => StubEndpoint(List(textResponse("a"))),
       created = created
     ) { _ =>
-      port.push(GatewayMessage(Origin("slack", "C1", "U1"), "m1"))
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U1", "C1"), "m1")
+      )
       port.nextReply()
-      port.push(GatewayMessage(Origin("slack", "C2", "U1"), "m2"))
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U1", "C2"), "m2")
+      )
       port.nextReply()
 
-      assertEquals(created.get, 2, "One runner per thread")
+      assertEquals(created.get, 2, "One runner per session")
+    }
+
+  test("same Slack handle in different workdirs maps to different UUIDs"):
+    val cp = FakeContextProvider()
+    val firstPort = FakePort(SlackPort.Id)
+    val firstCreated = AtomicInteger(0)
+    var firstSessionId: Option[SessionId] = None
+    runGateway(
+      List(firstPort),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("a"))),
+      created = firstCreated,
+      gatewayWorkDir = "/tmp/claw-one"
+    ) { _ =>
+      firstPort.push(
+        GatewayMessage(
+          externalOrigin(SlackPort.Id, "U1", "shared"),
+          "m1"
+        )
+      )
+      firstSessionId = Some(firstPort.nextReply().sessionId)
+    }
+
+    val secondPort = FakePort(SlackPort.Id)
+    val secondCreated = AtomicInteger(0)
+    runGateway(
+      List(secondPort),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("b"))),
+      created = secondCreated,
+      gatewayWorkDir = "/tmp/claw-two"
+    ) { _ =>
+      secondPort.push(
+        GatewayMessage(
+          externalOrigin(SlackPort.Id, "U1", "shared"),
+          "m2"
+        )
+      )
+      val secondSessionId = secondPort.nextReply().sessionId
+
+      assertNotEquals(secondSessionId, firstSessionId.get)
     }
 
   test("cold start rehydrates prior history into ClawAgent"):
-    val priorKey = ContextKey("slack", "C1")
     val seed = List(
       Message.user("[U_old] what was yesterday?"),
       Message.assistant("Tuesday.")
     )
-    val cp = FakeContextProvider(seeds = Map(priorKey -> seed))
-    val port = FakePort("slack")
+    val cp = FakeContextProvider(seeds = Map(sid("C1") -> seed))
+    val port = FakePort(SlackPort.Id)
     val created = AtomicInteger(0)
     val seenHistory = ConcurrentLinkedQueue[List[Message]]()
     runGateway(
@@ -212,7 +396,12 @@ class GatewaySuite extends munit.FunSuite:
       created = created,
       historySeen = seenHistory
     ) { _ =>
-      port.push(GatewayMessage(Origin("slack", "C1", "U1"), "and today?"))
+      port.push(
+        GatewayMessage(
+          externalOrigin(SlackPort.Id, "U1", "C1"),
+          "and today?"
+        )
+      )
       port.nextReply()
 
       assertEquals(created.get, 1)
@@ -223,9 +412,36 @@ class GatewaySuite extends munit.FunSuite:
       )
     }
 
+  test("validates external origins before creating a session handle"):
+    val resolveAttempts = AtomicInteger(0)
+    val cp = new FakeContextProvider():
+      override def resolveOrCreateHandle(
+          workdir: String,
+          handle: SessionHandle
+      ): SessionId =
+        resolveAttempts.incrementAndGet()
+        super.resolveOrCreateHandle(workdir, handle)
+
+    val port = RejectingPort(SlackPort.Id)
+    val created = AtomicInteger(0)
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("unused"))),
+      created = created
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U1", "invalid"), "hello")
+      )
+      Thread.sleep(200)
+
+      assertEquals(resolveAttempts.get, 0)
+      assertEquals(created.get, 0)
+    }
+
   test("rejects messages whose origin.port does not match the sending port id"):
     val cp = FakeContextProvider()
-    val port = FakePort("slack")
+    val port = FakePort(SlackPort.Id)
     val created = AtomicInteger(0)
     runGateway(
       List(port),
@@ -233,10 +449,128 @@ class GatewaySuite extends munit.FunSuite:
       endpointFactory = () => StubEndpoint(List(textResponse("ok"))),
       created = created
     ) { _ =>
-      // Push a GatewayMessage whose origin claims a different port; Gateway should
-      // drop it instead of creating a runner.
-      port.push(GatewayMessage(Origin("other", "T1", "U1"), "bogus"))
-      // Give the reader a moment; no runner should be spawned, no reply sent.
+      port.push(
+        GatewayMessage(
+          externalOrigin(PortId("other"), "U1", "T1"),
+          "bogus"
+        )
+      )
       Thread.sleep(200)
+      assertEquals(created.get, 0)
+    }
+
+  test(
+    "rejects external messages whose handle kind does not match origin port"
+  ):
+    val resolveAttempts = AtomicInteger(0)
+    val cp = new FakeContextProvider():
+      override def resolveOrCreateHandle(
+          workdir: String,
+          handle: SessionHandle
+      ): SessionId =
+        resolveAttempts.incrementAndGet()
+        super.resolveOrCreateHandle(workdir, handle)
+
+    val port = FakePort(SlackPort.Id)
+    val created = AtomicInteger(0)
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("unused"))),
+      created = created
+    ) { _ =>
+      val mismatched = Origin(
+        port = SlackPort.Id,
+        user = "U1",
+        session = SessionRef.External(SessionHandle(PortId("other"), "C1"))
+      )
+      port.push(GatewayMessage(mismatched, "hello"))
+      Thread.sleep(200)
+
+      assertEquals(resolveAttempts.get, 0)
+      assertEquals(created.get, 0)
+    }
+
+  test("recovers reader loop after session resolution or touch failure"):
+    val touchAttempts = AtomicInteger(0)
+    val cp = new FakeContextProvider():
+      override def touchSession(sessionId: SessionId): Unit =
+        if touchAttempts.incrementAndGet() == 1 then
+          throw RuntimeException("temporary sqlite failure")
+
+    val port = FakePort(SlackPort.Id)
+    val created = AtomicInteger(0)
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory =
+        () => StubEndpoint(List(textResponse("after recovery"))),
+      created = created
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U1", "C1"), "first")
+      )
+      Thread.sleep(200)
+      assertEquals(created.get, 0)
+
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U1", "C1"), "second")
+      )
+      val reply = port.nextReply()
+
+      assertEquals(reply.text, "after recovery")
+      assertEquals(created.get, 1)
+    }
+
+  test(
+    "rejects direct sessions from a different workdir and finalizes the turn"
+  ):
+    val cp = FakeContextProvider()
+    val sessionId = cp.createSession("/tmp/other-workdir")
+    val port = FakePort(CliPort.Id)
+    val created = AtomicInteger(0)
+
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("unused"))),
+      created = created,
+      gatewayWorkDir = "/tmp/current-workdir"
+    ) { _ =>
+      port.push(
+        GatewayMessage(directOrigin(CliPort.Id, "tester", sessionId), "hello")
+      )
+
+      val error = port.nextReply()
+      val finished = port.nextFinished()
+
+      assert(error.text.contains("belongs to workdir"))
+      assertEquals(error.sessionId, sessionId)
+      assertEquals(finished, sessionId)
+      assertEquals(created.get, 0)
+    }
+
+  test("rejects missing direct sessions and finalizes the turn"):
+    val cp = FakeContextProvider()
+    val sessionId = SessionId.random()
+    val port = FakePort(CliPort.Id)
+    val created = AtomicInteger(0)
+
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("unused"))),
+      created = created
+    ) { _ =>
+      port.push(
+        GatewayMessage(directOrigin(CliPort.Id, "tester", sessionId), "hello")
+      )
+
+      val error = port.nextReply()
+      val finished = port.nextFinished()
+
+      assert(error.text.contains("session not found"))
+      assertEquals(error.sessionId, sessionId)
+      assertEquals(finished, sessionId)
       assertEquals(created.get, 0)
     }

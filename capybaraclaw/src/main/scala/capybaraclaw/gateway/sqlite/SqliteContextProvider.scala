@@ -1,27 +1,35 @@
 package capybaraclaw.gateway.sqlite
 
-import capybaraclaw.gateway.{ContextKey, ContextProvider}
+import capybaraclaw.gateway.{
+  ContextProvider,
+  SessionHandle,
+  SessionId,
+  SessionMetadata
+}
 import org.flywaydb.core.Flyway
 import tacit.agents.llm.endpoint.{Content, Message, Role}
 
 import java.io.File
-import java.nio.file.Files
-import java.sql.{Connection, DriverManager}
+import java.nio.file.{Files, Path, Paths}
+import java.sql.{Connection, DriverManager, SQLException}
+import java.time.Instant
 import scala.util.Using
 
-/** SQLite-backed session store.
+/** SQLite-backed transcript store keyed by UUID `SessionId`.
   *
-  * `.claw/state.db` is the single source of truth. Schema is versioned by
-  * Flyway (`flyway_schema_history`); see `db/migration/V*.sql` resources.
+  * `~/.claw/state.db` is the single, global source of truth for messages and
+  * session metadata. Schema is versioned by Flyway; see `db/migration/V*.sql`
+  * resources.
   *
   * Concurrency model: one persistent writer connection + a small pool of
   * read-only connections.
   */
-class SqliteContextProvider(baseDir: File)
-    extends ContextProvider
+class SqliteContextProvider(
+    baseDir: Path = SqliteContextProvider.defaultBaseDir
+) extends ContextProvider
     with AutoCloseable:
 
-  private val dbFile = File(File(baseDir, ".claw"), "state.db")
+  private val dbFile = baseDir.resolve("state.db").toFile
   private val writeLock = Object()
 
   runMigrations()
@@ -34,17 +42,60 @@ class SqliteContextProvider(baseDir: File)
           writer.close()
         throw e
 
-  def load(key: ContextKey): List[Message] =
-    readers.withReader: reader =>
-      findSession(reader, key) match
-        case None            => Nil
-        case Some(sessionId) => selectMessages(reader, sessionId)
+  def createSession(workdir: String): SessionId =
+    writeLock.synchronized:
+      val sessionId = SessionId.random()
+      val now = Instant.now.toEpochMilli
+      inTransaction:
+        insertSession(writer, sessionId, workdir, now)
+        sessionId
 
-  def append(key: ContextKey, msg: Message): Unit =
+  def resumeSession(id: SessionId): Option[SessionMetadata] =
+    readers.withReader: reader =>
+      selectSession(reader, id)
+
+  def resolveOrCreateHandle(
+      workdir: String,
+      handle: SessionHandle
+  ): SessionId =
+    writeLock.synchronized:
+      selectHandle(writer, workdir, handle) match
+        case Some(sessionId) =>
+          sessionId
+        case None =>
+          try
+            inTransaction:
+              val sessionId = SessionId.random()
+              val now = Instant.now.toEpochMilli
+              insertSession(writer, sessionId, workdir, now)
+              insertHandle(writer, sessionId, workdir, handle)
+              sessionId
+          catch
+            case e: SQLException =>
+              selectHandle(writer, workdir, handle).getOrElse(throw e)
+
+  def touchSession(sessionId: SessionId): Unit =
+    writeLock.synchronized:
+      val sql =
+        "UPDATE sessions SET last_activity = ? WHERE id = ?"
+      SqliteJdbc.withStatement(writer, sql): stmt =>
+        stmt.setLong(1, Instant.now.toEpochMilli)
+        stmt.setString(2, sessionId.value)
+        val updated = stmt.executeUpdate()
+        if updated != 1 then
+          throw IllegalArgumentException(
+            s"session not found: ${sessionId.value}"
+          )
+        ()
+
+  def load(sessionId: SessionId): List[Message] =
+    readers.withReader: reader =>
+      selectMessages(reader, sessionId)
+
+  def append(sessionId: SessionId, msg: Message): Unit =
     persistableText(msg).foreach: (role, text) =>
       writeLock.synchronized:
         inTransaction:
-          val sessionId = findOrCreateSession(writer, key)
           insertMessage(writer, sessionId, role, text)
 
   def close(): Unit =
@@ -75,31 +126,9 @@ class SqliteContextProvider(baseDir: File)
           c.close()
         throw e
 
-  private def findSession(conn: Connection, key: ContextKey): Option[Long] =
-    SqliteJdbc.withStatement(
-      conn,
-      "SELECT id FROM sessions WHERE port = ? AND thread = ?"
-    ): stmt =>
-      stmt.setString(1, key.port)
-      stmt.setString(2, key.thread)
-      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then Some(rs.getLong("id")) else None
-
-  private def findOrCreateSession(conn: Connection, key: ContextKey): Long =
-    val sql =
-      """INSERT INTO sessions(port, thread) VALUES (?, ?)
-        |ON CONFLICT(port, thread) DO UPDATE SET port = sessions.port
-        |RETURNING id""".stripMargin
-    SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, key.port)
-      stmt.setString(2, key.thread)
-      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then rs.getLong("id")
-        else throw IllegalStateException("upsert returned no session id")
-
   private def selectMessages(
       conn: Connection,
-      sessionId: Long
+      sessionId: SessionId
   ): List[Message] =
     val sql =
       """SELECT role, text
@@ -107,7 +136,7 @@ class SqliteContextProvider(baseDir: File)
         |WHERE session_id = ?
         |ORDER BY id ASC""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setLong(1, sessionId)
+      stmt.setString(1, sessionId.value)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         Iterator
           .continually(rs.next())
@@ -121,18 +150,92 @@ class SqliteContextProvider(baseDir: File)
 
   private def insertMessage(
       conn: Connection,
-      sessionId: Long,
+      sessionId: SessionId,
       role: String,
       text: String
   ): Unit =
     val sql =
       "INSERT INTO messages(session_id, role, text) VALUES (?, ?, ?)"
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setLong(1, sessionId)
+      stmt.setString(1, sessionId.value)
       stmt.setString(2, role)
       stmt.setString(3, text)
       stmt.executeUpdate()
       ()
+
+  private def insertSession(
+      conn: Connection,
+      sessionId: SessionId,
+      workdir: String,
+      nowEpochMillis: Long
+  ): Unit =
+    val sql =
+      """INSERT INTO sessions(
+        |  id, workdir, created_at, last_activity
+        |) VALUES (?, ?, ?, ?)""".stripMargin
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setString(1, sessionId.value)
+      stmt.setString(2, workdir)
+      stmt.setLong(3, nowEpochMillis)
+      stmt.setLong(4, nowEpochMillis)
+      stmt.executeUpdate()
+      ()
+
+  private def insertHandle(
+      conn: Connection,
+      sessionId: SessionId,
+      workdir: String,
+      handle: SessionHandle
+  ): Unit =
+    val sql =
+      """INSERT INTO session_handles(session_id, workdir, kind, value)
+        |VALUES (?, ?, ?, ?)""".stripMargin
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setString(1, sessionId.value)
+      stmt.setString(2, workdir)
+      stmt.setString(3, handle.kind)
+      stmt.setString(4, handle.value)
+      stmt.executeUpdate()
+      ()
+
+  private def selectHandle(
+      conn: Connection,
+      workdir: String,
+      handle: SessionHandle
+  ): Option[SessionId] =
+    val sql =
+      """SELECT session_id
+        |FROM session_handles
+        |WHERE workdir = ? AND kind = ? AND value = ?""".stripMargin
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setString(1, workdir)
+      stmt.setString(2, handle.kind)
+      stmt.setString(3, handle.value)
+      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+        if rs.next() then Some(SessionId(rs.getString("session_id")))
+        else None
+
+  private def selectSession(
+      conn: Connection,
+      sessionId: SessionId
+  ): Option[SessionMetadata] =
+    val sql =
+      """SELECT id, workdir, created_at, last_activity
+        |FROM sessions
+        |WHERE id = ?""".stripMargin
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setString(1, sessionId.value)
+      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+        if rs.next() then
+          Some(
+            SessionMetadata(
+              SessionId(rs.getString("id")),
+              rs.getString("workdir"),
+              Instant.ofEpochMilli(rs.getLong("created_at")),
+              Instant.ofEpochMilli(rs.getLong("last_activity"))
+            )
+          )
+        else None
 
   private def persistableText(msg: Message): Option[(String, String)] =
     val role = msg.role match
@@ -161,3 +264,8 @@ class SqliteContextProvider(baseDir: File)
           conn.rollback()
         bestEffort:
           conn.setAutoCommit(previousAutoCommit)
+
+object SqliteContextProvider:
+  /** `~/.claw` */
+  def defaultBaseDir: Path =
+    Paths.get(System.getProperty("user.home"), ".claw")

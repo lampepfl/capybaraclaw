@@ -1,6 +1,6 @@
 package capybaraclaw.gateway.port.cli
 
-import capybaraclaw.gateway.{GatewayMessage, Origin}
+import capybaraclaw.gateway.{GatewayMessage, Origin, SessionId, SessionRef}
 import munit.FunSuite
 
 class CliTransitionsSuite extends FunSuite:
@@ -12,7 +12,7 @@ class CliTransitionsSuite extends FunSuite:
     now = 1_000_000L,
     newSpinnerWordIdx = 7,
     shouldRenderSpinner = true,
-    origin = Origin("cli", "stdin", "tester")
+    origin = Origin(CliPort.Id, "tester", SessionRef.Direct(SessionId.random()))
   )
 
   private val idle: State = State.initial

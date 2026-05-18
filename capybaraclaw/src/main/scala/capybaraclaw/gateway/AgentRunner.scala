@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory
 import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Message, StreamEvent}
 
-/** One runner per `ContextKey`. Owns an inbox, processes messages one turn at a time
+/** One runner per `sessionId`. Owns an inbox, processes messages one turn at a time
   * on its own fiber. While a turn is running, newly-arriving inbox messages are
   * forwarded as live steers on the active `AgentRun` so the LLM can react to them
   * before finishing its response.
@@ -16,9 +16,9 @@ import tacit.agents.llm.endpoint.{Message, StreamEvent}
   * agent can still tell who said what.
   */
 class AgentRunner(
-    key: ContextKey,
+    sessionId: SessionId,
     claw: ClawAgent,
-    port: Port,
+    portsById: Map[PortId, Port],
     contextProvider: ContextProvider
 ):
   private val logger = LoggerFactory.getLogger(classOf[AgentRunner])
@@ -40,23 +40,29 @@ class AgentRunner(
     while running do
       inbox.read() match
         case Right(msg) =>
-          try processTurn(msg)
+          val replyPort = portFor(msg.origin.port)
+          try processTurn(msg, replyPort)
           catch
             case e: Exception =>
-              logger.error(s"[runner $key] turn failed", e)
-              try port.sendError(key, e.getMessage)
+              logger.error(s"[runner $sessionId] turn failed", e)
+              try replyPort.sendError(sessionId, msg.origin, e.getMessage)
               catch case _: Exception => ()
           finally
-            try port.onTurnFinished(key)
+            try replyPort.onTurnFinished(sessionId, msg.origin)
             catch
               case e: Exception =>
-                logger.error(s"[runner $key] onTurnFinished failed", e)
+                logger.error(
+                  s"[runner $sessionId] onTurnFinished failed",
+                  e
+                )
         case Left(_) =>
           running = false
 
-  private def processTurn(msg: GatewayMessage)(using Async.Spawn): Unit =
+  private def processTurn(msg: GatewayMessage, replyPort: Port)(using
+      Async.Spawn
+  ): Unit =
     val tagged = tag(msg)
-    contextProvider.append(key, Message.user(tagged))
+    contextProvider.append(sessionId, Message.user(tagged))
 
     val run: AgentRun = claw.streamAsk(tagged)
     var finalText: String = ""
@@ -75,11 +81,11 @@ class AgentRunner(
           reading = false
 
     if finalText.nonEmpty then
-      contextProvider.append(key, Message.assistant(finalText))
-      try port.send(key, finalText)
+      contextProvider.append(sessionId, Message.assistant(finalText))
+      try replyPort.send(sessionId, msg.origin, finalText)
       catch
         case e: Exception =>
-          logger.error(s"[runner $key] port.send failed", e)
+          logger.error(s"[runner $sessionId] port.send failed", e)
 
   /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the
     * active run. Persist only after a successful steer: a rejected steer (race with
@@ -94,13 +100,19 @@ class AgentRunner(
           val t = tag(m)
           run.steer(t) match
             case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
-              contextProvider.append(key, Message.user(t))
+              contextProvider.append(sessionId, Message.user(t))
             case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
               try inbox.sendImmediately(m)
               catch case _: gears.async.ChannelClosedException => ()
               draining = false
         case _ =>
           draining = false
+
+  private def portFor(portId: PortId): Port =
+    portsById.getOrElse(
+      portId,
+      throw RuntimeException(s"No port registered with id '$portId'")
+    )
 
   private def tag(m: GatewayMessage): String =
     s"[${m.origin.user}] ${m.text}"
