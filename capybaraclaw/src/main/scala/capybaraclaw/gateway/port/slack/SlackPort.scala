@@ -46,7 +46,7 @@ class SlackPort(bot: SlackApi) extends Port:
           running = false
 
   override def validateOriginForReply(origin: Origin): Unit =
-    val _ = decodeHandle(handleFor(origin))
+    val _ = decodeHandle(getSlackHandle(origin))
 
   override def rejectInbound(origin: Origin, text: String): Unit =
     origin.session match
@@ -70,9 +70,9 @@ class SlackPort(bot: SlackApi) extends Port:
         ()
 
   def send(sessionId: SessionId, origin: Origin, text: String): Unit =
-    val handle = handleFor(origin)
+    val handle = getSlackHandle(origin)
     val (channelId, threadTs) = decodeHandle(handle)
-    logOut(sessionId, handle, text)
+    logOutgoingMessage(sessionId, handle, text)
     bot.sendMessage(channelId, text, threadTs)
 
   def shutdown(): Unit =
@@ -91,7 +91,7 @@ class SlackPort(bot: SlackApi) extends Port:
       session = SessionRef.External(SessionHandle(SlackPort.Id, raw))
     )
 
-  private def handleFor(origin: Origin): SessionHandle =
+  private def getSlackHandle(origin: Origin): SessionHandle =
     origin.session match
       case SessionRef.External(handle) => handle
       case SessionRef.Direct(_)        =>
@@ -136,7 +136,7 @@ class SlackPort(bot: SlackApi) extends Port:
       snippet(text)
     )
 
-  private def logOut(
+  private def logOutgoingMessage(
       sessionId: SessionId,
       handle: SessionHandle,
       text: String
