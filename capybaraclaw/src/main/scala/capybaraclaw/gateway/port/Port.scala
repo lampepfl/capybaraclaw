@@ -1,12 +1,6 @@
 package capybaraclaw.gateway.port
 
-import capybaraclaw.gateway.{
-  GatewayMessage,
-  Origin,
-  PortId,
-  SessionId,
-  SessionRef
-}
+import capybaraclaw.gateway.{GatewayMessage, Origin, PortId, SessionId}
 import gears.async.ReadableChannel
 
 /** A message source/sink through which the Gateway talks to the outside world.
@@ -51,17 +45,10 @@ trait Port extends AutoCloseable:
   ): Unit = ()
 
   /** Notify a port that an inbound message was rejected before a runner could
-    * take ownership of the turn. Direct sessions can be finalized through the
-    * normal error/turn-finished hooks; external handles may not have a resolved
-    * UUID yet, so the default is a no-op for them.
+    * take ownership of the turn. External ports must map the unresolved origin
+    * back to their native address so users are not left without feedback.
     */
-  def rejectInbound(origin: Origin, text: String): Unit =
-    origin.session match
-      case SessionRef.Direct(sessionId) =>
-        try sendError(sessionId, origin, text)
-        finally onTurnFinished(sessionId, origin)
-      case SessionRef.External(_) =>
-        ()
+  def rejectInbound(origin: Origin, text: String): Unit
 
   /** Release any resources (network connections, background listeners). */
   def shutdown(): Unit

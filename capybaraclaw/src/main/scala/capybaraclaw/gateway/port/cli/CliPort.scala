@@ -93,6 +93,14 @@ class CliPort(
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
+  override def rejectInbound(origin: Origin, text: String): Unit =
+    origin.session match
+      case SessionRef.Direct(sessionId) =>
+        try sendError(sessionId, origin, text)
+        finally onTurnFinished(sessionId, origin)
+      case SessionRef.External(_) =>
+        throw IllegalArgumentException("CLI rejects require a direct session")
+
   def shutdown(): Unit =
     Try(shutdownPromise.complete(Success(())))
 

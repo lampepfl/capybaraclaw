@@ -7,11 +7,12 @@ import capybaraclaw.gateway.{
   SessionMetadata
 }
 import org.flywaydb.core.Flyway
+import org.sqlite.{SQLiteErrorCode, SQLiteException}
 import tacit.agents.llm.endpoint.{Content, Message, Role}
 
 import java.io.File
 import java.nio.file.{Files, Path, Paths}
-import java.sql.{Connection, DriverManager, SQLException}
+import java.sql.{Connection, DriverManager}
 import java.time.Instant
 import scala.util.Using
 
@@ -81,7 +82,7 @@ class SqliteContextProvider(
               insertHandle(writer, sessionId, workdir, handle)
               sessionId
           catch
-            case e: SQLException =>
+            case e: SQLiteException if isHandleConflict(e) =>
               selectHandle(writer, workdir, handle) match
                 case Some(sessionId) =>
                   inTransaction:
@@ -137,7 +138,7 @@ class SqliteContextProvider(
         |WHERE session_id = ?
         |ORDER BY id ASC""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId.value)
+      stmt.setString(1, sessionId)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         Iterator
           .continually(rs.next())
@@ -158,7 +159,7 @@ class SqliteContextProvider(
     val sql =
       "INSERT INTO messages(session_id, role, text) VALUES (?, ?, ?)"
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId.value)
+      stmt.setString(1, sessionId)
       stmt.setString(2, role)
       stmt.setString(3, text)
       stmt.executeUpdate()
@@ -175,7 +176,7 @@ class SqliteContextProvider(
         |  id, workdir, created_at, last_activity
         |) VALUES (?, ?, ?, ?)""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId.value)
+      stmt.setString(1, sessionId)
       stmt.setString(2, workdir)
       stmt.setLong(3, nowEpochMillis)
       stmt.setLong(4, nowEpochMillis)
@@ -192,7 +193,7 @@ class SqliteContextProvider(
       """INSERT INTO session_handles(session_id, workdir, kind, value)
         |VALUES (?, ?, ?, ?)""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId.value)
+      stmt.setString(1, sessionId)
       stmt.setString(2, workdir)
       stmt.setString(3, handle.kind)
       stmt.setString(4, handle.value)
@@ -207,7 +208,7 @@ class SqliteContextProvider(
     val sql = "UPDATE sessions SET last_activity = ? WHERE id = ?"
     SqliteJdbc.withStatement(conn, sql): stmt =>
       stmt.setLong(1, nowEpochMillis)
-      stmt.setString(2, sessionId.value)
+      stmt.setString(2, sessionId)
       stmt.executeUpdate()
 
   private def selectHandle(
@@ -243,7 +244,7 @@ class SqliteContextProvider(
         |FROM sessions
         |WHERE id = ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId.value)
+      stmt.setString(1, sessionId)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         if rs.next() then
           val rawId = rs.getString("id")
@@ -264,6 +265,9 @@ class SqliteContextProvider(
           s"corrupt session id in $context: '$raw' is not a valid UUID",
           e
         )
+
+  private def isHandleConflict(e: SQLiteException): Boolean =
+    e.getResultCode == SQLiteErrorCode.SQLITE_CONSTRAINT_UNIQUE
 
   private def persistableText(msg: Message): Option[(String, String)] =
     val role = msg.role match

@@ -63,12 +63,17 @@ class Gateway(
               port.id,
               msg.origin.port
             )
+            rejectInbound(
+              port,
+              msg.origin,
+              s"origin port '${msg.origin.port}' does not match receiving port '${port.id}'"
+            )
           else
             try
               port.validateOriginForReply(msg.origin)
               val sessionId = sessionIdFor(msg.origin)
               val runner = getOrCreateRunner(sessionId)
-              runner.deliver(msg)
+              runner.deliver(RoutedGatewayMessage(msg, port))
             catch
               case e: IllegalArgumentException =>
                 logger.warn(
@@ -95,7 +100,7 @@ class Gateway(
           val history = contextProvider.load(sessionId)
           val claw = clawFactory(workDir, history)
           val runner =
-            AgentRunner(sessionId, claw, portsById, contextProvider)
+            AgentRunner(sessionId, claw, contextProvider)
           runner.start()
           runners.update(sessionId, runner)
           runner
@@ -108,11 +113,11 @@ class Gateway(
             sessionId
           case Some(metadata) =>
             throw IllegalArgumentException(
-              s"session ${sessionId.value} belongs to workdir '${metadata.workdir}', not '$workDir'"
+              s"session $sessionId belongs to workdir '${metadata.workdir}', not '$workDir'"
             )
           case None =>
             throw IllegalArgumentException(
-              s"session not found: ${sessionId.value}"
+              s"session not found: $sessionId"
             )
       case SessionRef.External(handle) =>
         if handle.kind != origin.port then

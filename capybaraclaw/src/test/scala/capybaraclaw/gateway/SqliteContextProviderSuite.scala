@@ -27,10 +27,10 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           conn,
           """SELECT id, workdir, created_at, last_activity
             |FROM sessions WHERE id = ?""".stripMargin,
-          List(sessionId.value)
+          List(sessionId)
         )
         assertEquals(rows.size, 1)
-        assertEquals(rows.head(0), sessionId.value)
+        assertEquals(rows.head(0), sessionId)
         assertEquals(rows.head(1), WD)
         assertEquals(rows.head(2), rows.head(3))
         assertEquals(queryInt(conn, "SELECT COUNT(*) FROM session_handles"), 0)
@@ -73,7 +73,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         queryRowsPrepared(
           conn,
           "SELECT last_activity FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         ).head.head.toLong
 
       val observed = provider.verifyAndTouchSession(sessionId, WD)
@@ -87,7 +87,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         val lastActivityAfter = queryRowsPrepared(
           conn,
           "SELECT last_activity FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         ).head.head.toLong
         assertNotEquals(
           lastActivityAfter,
@@ -111,7 +111,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         queryRowsPrepared(
           conn,
           "SELECT created_at FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         ).head.head
 
       val observed = provider.verifyAndTouchSession(sessionId, OtherWD)
@@ -121,7 +121,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         val rows = queryRowsPrepared(
           conn,
           "SELECT created_at, last_activity FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         )
         assertEquals(
           rows.head(0),
@@ -137,7 +137,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         queryRowsPrepared(
           conn,
           "SELECT created_at FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         ).head.head
 
       val again = provider.resolveOrCreateHandle(WD, handle("C1"))
@@ -147,7 +147,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         val rows = queryRowsPrepared(
           conn,
           "SELECT created_at, last_activity FROM sessions WHERE id = ?",
-          List(sessionId.value)
+          List(sessionId)
         )
         assertEquals(rows.head(0), createdAt, "created_at preserved")
         assertNotEquals(

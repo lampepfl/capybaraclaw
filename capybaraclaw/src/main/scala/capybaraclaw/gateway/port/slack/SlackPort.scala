@@ -63,7 +63,7 @@ class SlackPort(bot: SlackApi) extends Port:
       case SessionRef.Direct(sessionId) =>
         logger.warn(
           "[slack] dropping reject for direct session {}: {}",
-          sessionId.value,
+          sessionId,
           text
         )
       case SessionRef.External(_) =>
@@ -139,13 +139,13 @@ class SlackPort(bot: SlackApi) extends Port:
   ): Unit =
     logger.info(
       "[slack ->] ({}, {}) ({} chars)",
-      sessionId.value,
+      sessionId,
       handle.value,
       text.length
     )
     logger.debug(
       "[slack ->] ({}, {}) {}",
-      sessionId.value,
+      sessionId,
       handle.value,
       snippet(text)
     )

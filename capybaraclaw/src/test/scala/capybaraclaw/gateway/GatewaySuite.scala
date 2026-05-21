@@ -36,6 +36,7 @@ object FakePort:
       handle: Option[SessionHandle],
       text: String
   )
+  final case class Rejection(origin: Origin, text: String)
 
   private def replyHandle(origin: Origin): Option[SessionHandle] =
     origin.session match
@@ -81,6 +82,7 @@ class FakePort(override val id: PortId) extends Port:
   private val inCh = UnboundedChannel[GatewayMessage]()
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
+  private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
 
   def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
 
@@ -91,6 +93,15 @@ class FakePort(override val id: PortId) extends Port:
 
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     finishedTurns.put(sessionId)
+
+  override def rejectInbound(origin: Origin, text: String): Unit =
+    rejectedInbound.put(FakePort.Rejection(origin, text))
+    origin.session match
+      case SessionRef.Direct(sessionId) =>
+        try sendError(sessionId, origin, text)
+        finally onTurnFinished(sessionId, origin)
+      case SessionRef.External(_) =>
+        ()
 
   def shutdown(): Unit =
     try inCh.close()
@@ -113,6 +124,14 @@ class FakePort(override val id: PortId) extends Port:
     val got = finishedTurns.poll(timeoutMs, TimeUnit.MILLISECONDS)
     if got == null then
       throw new AssertionError(s"No turn finish within ${timeoutMs}ms")
+    got
+
+  def nextRejection(
+      timeoutMs: Long = FakePort.defaultReplyTimeoutMs
+  ): FakePort.Rejection =
+    val got = rejectedInbound.poll(timeoutMs, TimeUnit.MILLISECONDS)
+    if got == null then
+      throw new AssertionError(s"No rejection within ${timeoutMs}ms")
     got
 
 /** In-memory `ContextProvider` for assertions on the persisted transcript order. */
@@ -245,6 +264,23 @@ class GatewaySuite extends munit.FunSuite:
         ConcurrentLinkedQueue(),
       gatewayWorkDir: String = workDir
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
+    runGatewayWithResult(
+      ports,
+      cp,
+      endpointFactory,
+      created,
+      historySeen,
+      gatewayWorkDir
+    )(body)
+
+  private def runGatewayWithResult[R](
+      ports: List[Port],
+      cp: ContextProvider,
+      endpointFactory: () => Endpoint,
+      created: AtomicInteger,
+      historySeen: ConcurrentLinkedQueue[List[Message]],
+      gatewayWorkDir: String
+  )(body: Async.Spawn ?=> Gateway => R): R =
     val factory: (String, List[Message]) => ClawAgent = (wd, hist) =>
       created.incrementAndGet()
       historySeen.offer(hist)
@@ -331,13 +367,13 @@ class GatewaySuite extends munit.FunSuite:
     val cp = FakeContextProvider()
     val firstPort = FakePort(SlackPort.Id)
     val firstCreated = AtomicInteger(0)
-    var firstSessionId: Option[SessionId] = None
-    runGateway(
+    val firstSessionId = runGatewayWithResult(
       List(firstPort),
       cp,
-      endpointFactory = () => StubEndpoint(List(textResponse("a"))),
-      created = firstCreated,
-      gatewayWorkDir = "/tmp/claw-one"
+      () => StubEndpoint(List(textResponse("a"))),
+      firstCreated,
+      ConcurrentLinkedQueue[List[Message]](),
+      "/tmp/claw-one"
     ) { _ =>
       firstPort.push(
         GatewayMessage(
@@ -345,7 +381,7 @@ class GatewaySuite extends munit.FunSuite:
           "m1"
         )
       )
-      firstSessionId = Some(firstPort.nextReply().sessionId)
+      firstPort.nextReply().sessionId
     }
 
     val secondPort = FakePort(SlackPort.Id)
@@ -365,7 +401,7 @@ class GatewaySuite extends munit.FunSuite:
       )
       val secondSessionId = secondPort.nextReply().sessionId
 
-      assertNotEquals(secondSessionId, firstSessionId.get)
+      assertNotEquals(secondSessionId, firstSessionId)
     }
 
   test("cold start rehydrates prior history into ClawAgent"):
@@ -421,8 +457,10 @@ class GatewaySuite extends munit.FunSuite:
       port.push(
         GatewayMessage(externalOrigin(SlackPort.Id, "U1", "invalid"), "hello")
       )
-      Thread.sleep(200)
+      val rejection = port.nextRejection()
 
+      assertEquals(rejection.origin.user, UserId("U1"))
+      assert(rejection.text.contains("invalid reply origin"))
       assertEquals(resolveAttempts.get, 0)
       assertEquals(created.get, 0)
     }
@@ -443,7 +481,9 @@ class GatewaySuite extends munit.FunSuite:
           "bogus"
         )
       )
-      Thread.sleep(200)
+      val rejection = port.nextRejection()
+
+      assert(rejection.text.contains("does not match receiving port"))
       assertEquals(created.get, 0)
     }
 
@@ -473,8 +513,9 @@ class GatewaySuite extends munit.FunSuite:
         session = SessionRef.External(SessionHandle(PortId("other"), "C1"))
       )
       port.push(GatewayMessage(mismatched, "hello"))
-      Thread.sleep(200)
+      val rejection = port.nextRejection()
 
+      assert(rejection.text.contains("does not match origin port"))
       assertEquals(resolveAttempts.get, 0)
       assertEquals(created.get, 0)
     }
@@ -502,7 +543,8 @@ class GatewaySuite extends munit.FunSuite:
       port.push(
         GatewayMessage(externalOrigin(SlackPort.Id, "U1", "C1"), "first")
       )
-      Thread.sleep(200)
+      val rejection = port.nextRejection()
+      assert(rejection.text.contains("temporary sqlite failure"))
       assertEquals(created.get, 0)
 
       port.push(

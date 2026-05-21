@@ -3,19 +3,11 @@ package capybaraclaw.gateway
 import java.time.Instant
 import java.util.UUID
 
-final class SessionId private (val value: String):
-  override def equals(other: Any): Boolean =
-    other match
-      case that: SessionId => value == that.value
-      case _               => false
-
-  override def hashCode(): Int = value.hashCode
-
-  override def toString: String = value
+opaque type SessionId <: String = String
 
 object SessionId:
   def apply(value: String): SessionId =
-    new SessionId(UUID.fromString(value).toString)
+    UUID.fromString(value).toString
 
   def random(): SessionId =
     SessionId(UUID.randomUUID().toString)
@@ -38,7 +30,7 @@ object SessionRef:
 /** Sender identity of an inbound message. CLI provides the canonical session UUID
   * directly; external ports provide a handle that resolves to a UUID.
   */
-case class Origin(
+final case class Origin(
     port: PortId,
     user: UserId,
     session: SessionRef

@@ -109,7 +109,7 @@ private def printStartupInfo(
   val logFile =
     File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
   println("Capybara Claw Gateway")
-  println(s"  session  : ${sessionId.value}")
+  println(s"  session  : $sessionId")
   println(s"  workdir  : $workDir")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")

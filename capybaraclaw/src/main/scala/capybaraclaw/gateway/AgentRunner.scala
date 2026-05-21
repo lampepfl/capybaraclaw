@@ -8,6 +8,11 @@ import scala.util.control.NonFatal
 import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Message, StreamEvent}
 
+private[gateway] final case class RoutedGatewayMessage(
+    message: GatewayMessage,
+    replyPort: Port
+)
+
 /** One runner per `sessionId`. Owns an inbox, processes messages one turn at a time
   * on its own fiber. While a turn is running, newly-arriving inbox messages are
   * forwarded as live steers on the active `AgentRun` so the LLM can react to them
@@ -19,14 +24,13 @@ import tacit.agents.llm.endpoint.{Message, StreamEvent}
 class AgentRunner(
     sessionId: SessionId,
     claw: ClawAgent,
-    portsById: Map[PortId, Port],
     contextProvider: ContextProvider
 ):
   private val logger = LoggerFactory.getLogger(classOf[AgentRunner])
-  private val inbox = UnboundedChannel[GatewayMessage]()
+  private val inbox = UnboundedChannel[RoutedGatewayMessage]()
 
-  def deliver(msg: GatewayMessage): Unit =
-    try inbox.sendImmediately(msg)
+  def deliver(routed: RoutedGatewayMessage): Unit =
+    try inbox.sendImmediately(routed)
     catch case _: gears.async.ChannelClosedException => ()
 
   def close(): Unit =
@@ -40,8 +44,9 @@ class AgentRunner(
     var running = true
     while running do
       inbox.read() match
-        case Right(msg) =>
-          val replyPort = portFor(msg.origin.port)
+        case Right(routed) =>
+          val msg = routed.message
+          val replyPort = routed.replyPort
           try processTurn(msg, replyPort)
           catch
             case NonFatal(e) =>
@@ -98,7 +103,7 @@ class AgentRunner(
     while draining do
       inbox.readSource.poll() match
         case Some(Right(m)) =>
-          val t = tag(m)
+          val t = tag(m.message)
           run.steer(t) match
             case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
               contextProvider.append(sessionId, Message.user(t))
@@ -108,12 +113,6 @@ class AgentRunner(
               draining = false
         case _ =>
           draining = false
-
-  private def portFor(portId: PortId): Port =
-    portsById.getOrElse(
-      portId,
-      throw RuntimeException(s"No port registered with id '$portId'")
-    )
 
   private def tag(m: GatewayMessage): String =
     s"[${m.origin.user}] ${m.text}"
