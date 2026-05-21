@@ -94,7 +94,7 @@ class SlackPort(bot: SlackApi) extends Port:
   private def handleFor(origin: Origin): SessionHandle =
     origin.session match
       case SessionRef.External(handle) => handle
-      case SessionRef.Direct(_) =>
+      case SessionRef.Direct(_)        =>
         throw IllegalArgumentException("Slack replies require a session handle")
 
   private def decodeHandle(
