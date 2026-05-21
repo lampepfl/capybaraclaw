@@ -53,7 +53,7 @@ class SlackPort(bot: SlackApi) extends Port:
       case SessionRef.External(handle) if handle.kind == SlackPort.Id =>
         try
           val (channelId, threadTs) = decodeHandle(handle)
-          bot.sendMessage(channelId, s"ERROR: $text", threadTs)
+          bot.sendMessage(channelId, formatRejectMessage(text), threadTs)
         catch
           case e: Exception =>
             logger.warn(
@@ -114,6 +114,10 @@ class SlackPort(bot: SlackApi) extends Port:
             s"Invalid Slack handle value: ${handle.value}"
           )
         (channelId, Some(threadTs))
+
+  private def formatRejectMessage(text: String): String =
+    s""":warning: *Capybara Claw could not process that message*
+       |```$text```""".stripMargin
 
   private def logIn(origin: Origin, text: String): Unit =
     val handleValue = origin.session match

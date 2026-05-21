@@ -67,7 +67,14 @@ class SlackPortSuite extends munit.FunSuite:
 
     assertEquals(
       bot.sent.toList,
-      List(Sent("C123", "ERROR: session resolution failed", Some("123.456")))
+      List(
+        Sent(
+          "C123",
+          """:warning: *Capybara Claw could not process that message*
+            |```session resolution failed```""".stripMargin,
+          Some("123.456")
+        )
+      )
     )
 
   test(
@@ -79,7 +86,17 @@ class SlackPortSuite extends munit.FunSuite:
 
     port.rejectInbound(origin, "boom")
 
-    assertEquals(bot.sent.toList, List(Sent("C123", "ERROR: boom", None)))
+    assertEquals(
+      bot.sent.toList,
+      List(
+        Sent(
+          "C123",
+          """:warning: *Capybara Claw could not process that message*
+            |```boom```""".stripMargin,
+          None
+        )
+      )
+    )
 
   test(
     "rejectInbound swallows bot failures so gateway is not destabilized"
