@@ -51,10 +51,6 @@ class SqliteContextProvider(
         insertSession(writer, sessionId, workdir, now)
         sessionId
 
-  def resumeSession(id: SessionId): Option[SessionMetadata] =
-    readers.withReader: reader =>
-      selectSession(reader, id)
-
   def verifyAndTouchSession(
       id: SessionId,
       expectedWorkdir: String
@@ -92,15 +88,6 @@ class SqliteContextProvider(
                     updateLastActivity(writer, sessionId, nowMillis())
                   sessionId
                 case None => throw e
-
-  def touchSession(sessionId: SessionId): Unit =
-    writeLock.synchronized:
-      val updated = inTransaction:
-        updateLastActivity(writer, sessionId, nowMillis())
-      if updated != 1 then
-        throw IllegalArgumentException(
-          s"session not found: ${sessionId.value}"
-        )
 
   def load(sessionId: SessionId): List[Message] =
     readers.withReader: reader =>
@@ -252,7 +239,7 @@ class SqliteContextProvider(
       sessionId: SessionId
   ): Option[SessionMetadata] =
     val sql =
-      """SELECT id, workdir, created_at, last_activity
+      """SELECT id, workdir, last_activity
         |FROM sessions
         |WHERE id = ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
@@ -264,7 +251,6 @@ class SqliteContextProvider(
             SessionMetadata(
               parseSessionId(rawId, s"sessions.id (looked up by '$rawId')"),
               rs.getString("workdir"),
-              Instant.ofEpochMilli(rs.getLong("created_at")),
               Instant.ofEpochMilli(rs.getLong("last_activity"))
             )
           )

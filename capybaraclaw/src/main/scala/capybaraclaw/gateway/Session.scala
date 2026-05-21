@@ -23,7 +23,6 @@ object SessionId:
 final case class SessionMetadata(
     id: SessionId,
     workdir: String,
-    createdAt: Instant,
     lastActivity: Instant
 )
 

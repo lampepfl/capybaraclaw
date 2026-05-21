@@ -29,7 +29,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
     withProvider(): (provider, dbPath) =>
       val sessionId = provider.createSession(WD)
 
-      assert(provider.resumeSession(sessionId).isDefined)
       withConnection(dbPath): conn =>
         val rows = queryRowsPrepared(
           conn,
@@ -73,62 +72,34 @@ class SqliteContextProviderSuite extends munit.FunSuite:
       assertEquals(provider.load(c).map(_.text), List("gamma message"))
 
   test(
-    "touchSession preserves created_at and bumps last_activity"
-  ):
-    withProvider(sequentialClock()): (provider, dbPath) =>
-      val sessionId = provider.createSession(WD)
-      provider.touchSession(sessionId)
-
-      withConnection(dbPath): conn =>
-        val rows = queryRowsPrepared(
-          conn,
-          """SELECT workdir, created_at, last_activity
-            |FROM sessions WHERE id = ?""".stripMargin,
-          List(sessionId.value)
-        )
-        assertEquals(rows.size, 1)
-        val row = rows.head
-        assertEquals(row(0), WD, "workdir preserved")
-        assertNotEquals(
-          row(1),
-          row(2),
-          "last_activity advanced past created_at"
-        )
-
-  test(
-    "touchSession fails when the session UUID does not exist"
-  ):
-    withProvider(): (provider, _) =>
-      val missing = SessionId.random()
-
-      val error = intercept[IllegalArgumentException]:
-        provider.touchSession(missing)
-
-      assert(
-        error.getMessage.contains(missing.value),
-        s"error should mention the missing session id, got: ${error.getMessage}"
-      )
-
-  test(
     "verifyAndTouchSession returns pre-bump metadata and bumps last_activity"
   ):
     withProvider(sequentialClock()): (provider, dbPath) =>
       val sessionId = provider.createSession(WD)
-      val before = provider.resumeSession(sessionId).get
+      val lastActivityBefore = withConnection(dbPath): conn =>
+        queryRowsPrepared(
+          conn,
+          "SELECT last_activity FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        ).head.head.toLong
 
       val observed = provider.verifyAndTouchSession(sessionId, WD)
-      assertEquals(observed.map(_.lastActivity), Some(before.lastActivity))
+      assertEquals(
+        observed.map(_.lastActivity.toEpochMilli),
+        Some(lastActivityBefore),
+        "returned metadata reflects pre-bump state"
+      )
 
       withConnection(dbPath): conn =>
-        val rows = queryRowsPrepared(
+        val lastActivityAfter = queryRowsPrepared(
           conn,
-          "SELECT created_at, last_activity FROM sessions WHERE id = ?",
+          "SELECT last_activity FROM sessions WHERE id = ?",
           List(sessionId.value)
-        )
+        ).head.head.toLong
         assertNotEquals(
-          rows.head(0),
-          rows.head(1),
-          "last_activity advanced past created_at"
+          lastActivityAfter,
+          lastActivityBefore,
+          "DB last_activity advanced"
         )
 
   test("verifyAndTouchSession returns None for an unknown session UUID"):
@@ -239,7 +210,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
 
       assertEquals(second, first)
       assertNotEquals(third, first)
-      assert(provider.resumeSession(first).exists(_.workdir == WD))
 
   test("same Slack local id in different workdirs creates two UUIDs"):
     withProvider(): (provider, dbPath) =>
@@ -380,41 +350,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
     val provider = SqliteContextProvider(dir)
     provider.close()
     provider.close() // must not throw
-
-  test(
-    "concurrent providers in same baseDir do not deadlock or violate uniqueness"
-  ):
-    val dir = Files.createTempDirectory("claw-multi-instance")
-    val providerA = SqliteContextProvider(dir)
-    try
-      val providerB = SqliteContextProvider(dir)
-      try
-        val sessionId =
-          providerA.resolveOrCreateHandle(WD, handle("shared"))
-
-        val threadA = new Thread(() =>
-          (1 to 5).foreach: i =>
-            providerA.touchSession(sessionId)
-            providerA.append(sessionId, Message.user(s"a-$i"))
-        )
-        val threadB = new Thread(() =>
-          (1 to 5).foreach: i =>
-            providerB.touchSession(sessionId)
-            providerB.append(sessionId, Message.user(s"b-$i"))
-        )
-
-        threadA.start()
-        threadB.start()
-        threadA.join()
-        threadB.join()
-
-        val combined = providerA.load(sessionId).map(_.text).toSet
-        assertEquals(
-          combined,
-          (1 to 5).flatMap(i => List(s"a-$i", s"b-$i")).toSet
-        )
-      finally providerB.close()
-    finally providerA.close()
 
   private def withProvider(
       nowMillis: () => Long = () => Instant.now.toEpochMilli

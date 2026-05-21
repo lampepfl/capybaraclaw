@@ -95,10 +95,9 @@ private def canonicalFile(path: String): Either[String, File] =
   try Right(File(path).getCanonicalFile)
   catch
     case NonFatal(e) =>
-      Left(s"[claw] failed to resolve workdir '$path': ${errorMessage(e)}")
-
-private def errorMessage(e: Throwable): String =
-  Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
+      Left(
+        s"[claw] failed to resolve workdir '$path': ${Throwables.errorMessage(e)}"
+      )
 
 private def printStartupInfo(
     workDir: String,

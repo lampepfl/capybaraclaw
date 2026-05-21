@@ -11,9 +11,6 @@ trait ContextProvider:
   /** Create a fresh canonical session UUID for `workdir`. */
   def createSession(workdir: String): SessionId
 
-  /** Look up a canonical session by UUID. */
-  def resumeSession(id: SessionId): Option[SessionMetadata]
-
   /** Look up a canonical session by UUID; bump `last_activity` only when the
     * stored workdir matches `expectedWorkdir`. Returns the pre-bump metadata,
     * or `None` when the session does not exist.
@@ -25,15 +22,12 @@ trait ContextProvider:
 
   /** Resolve an external handle to its canonical session UUID, creating both
     * the session and handle when absent. Bumps `last_activity` on a hit so the
-    * caller does not need a follow-up `touchSession`.
+    * caller does not need a follow-up touch.
     */
   def resolveOrCreateHandle(
       workdir: String,
       handle: SessionHandle
   ): SessionId
-
-  /** Bump `last_activity` for an existing session. */
-  def touchSession(sessionId: SessionId): Unit
 
   /** Load prior conversation for this session. Empty list for never-seen sessions. */
   def load(sessionId: SessionId): List[Message]

@@ -141,9 +141,6 @@ class FakeContextProvider(
       sessions.update(sessionId, metadata(sessionId, workdir))
       sessionId
 
-  def resumeSession(id: SessionId): Option[SessionMetadata] =
-    sessions.get(id)
-
   def verifyAndTouchSession(
       id: SessionId,
       expectedWorkdir: String
@@ -174,16 +171,6 @@ class FakeContextProvider(
           handles.update((workdir, handle), sessionId)
           sessionId
 
-  def touchSession(sessionId: SessionId): Unit =
-    lock.synchronized:
-      sessions.get(sessionId) match
-        case Some(m) =>
-          sessions.update(sessionId, m.copy(lastActivity = Instant.now))
-        case None =>
-          throw IllegalArgumentException(
-            s"session not found: ${sessionId.value}"
-          )
-
   def load(sessionId: SessionId): List[Message] =
     store.getOrElse(sessionId, Nil)
 
@@ -200,8 +187,7 @@ class FakeContextProvider(
       sessionId: SessionId,
       workdir: String
   ): SessionMetadata =
-    val now = Instant.now
-    SessionMetadata(sessionId, workdir, now, now)
+    SessionMetadata(sessionId, workdir, Instant.now)
 
   private def deterministicSessionId(
       workdir: String,

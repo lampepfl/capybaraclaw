@@ -1,5 +1,6 @@
 package capybaraclaw.gateway
 
+import capybaraclaw.Throwables
 import capybaraclaw.agent.ClawAgent
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future}
@@ -66,7 +67,7 @@ class Gateway(
             try
               port.validateOriginForReply(msg.origin)
               val sessionId = sessionIdFor(msg.origin)
-              val runner = getOrCreateRunner(msg.origin, sessionId)
+              val runner = getOrCreateRunner(sessionId)
               runner.deliver(msg)
             catch
               case e: IllegalArgumentException =>
@@ -80,11 +81,11 @@ class Gateway(
                   "dropping message after session resolution failed",
                   e
                 )
-                rejectInbound(port, msg.origin, errorMessage(e))
+                rejectInbound(port, msg.origin, Throwables.errorMessage(e))
         case Left(_) =>
           running = false
 
-  private def getOrCreateRunner(origin: Origin, sessionId: SessionId)(using
+  private def getOrCreateRunner(sessionId: SessionId)(using
       Async.Spawn
   ): AgentRunner =
     runnersLock.synchronized:
@@ -133,6 +134,3 @@ class Gateway(
           port.id,
           e
         )
-
-  private def errorMessage(e: Throwable): String =
-    Option(e.getMessage).filter(_.nonEmpty).getOrElse(e.getClass.getSimpleName)
