@@ -6,7 +6,8 @@ import capybaraclaw.gateway.{
   Origin,
   PortId,
   SessionId,
-  SessionRef
+  SessionRef,
+  UserId
 }
 import capybaraclaw.gateway.port.Port
 
@@ -44,7 +45,7 @@ import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 /** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
     override val id: PortId = CliPort.Id,
-    user: String = sys.env.getOrElse("USER", "cli"),
+    user: UserId = UserId(sys.env.getOrElse("USER", "cli")),
     workDirFile: File = java.io.File(".").getCanonicalFile,
     sessionId: SessionId
 ) extends Port:
@@ -79,17 +80,17 @@ class CliPort(
         printGoodbye(finalState.turnCount)
       finally cleanup()
 
-  def send(_sessionId: SessionId, origin: Origin, text: String): Unit =
+  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
     offerEvent(AssistantText(text))
 
   override def sendError(
-      _sessionId: SessionId,
+      sessionId: SessionId,
       origin: Origin,
       text: String
   ): Unit =
     offerEvent(ErrorText(text))
 
-  override def onTurnFinished(_sessionId: SessionId, origin: Origin): Unit =
+  override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
   def shutdown(): Unit =

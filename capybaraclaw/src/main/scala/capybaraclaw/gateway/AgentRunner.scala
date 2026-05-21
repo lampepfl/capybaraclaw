@@ -4,6 +4,7 @@ import capybaraclaw.agent.ClawAgent
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future, UnboundedChannel}
 import org.slf4j.LoggerFactory
+import scala.util.control.NonFatal
 import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Message, StreamEvent}
 
@@ -43,14 +44,14 @@ class AgentRunner(
           val replyPort = portFor(msg.origin.port)
           try processTurn(msg, replyPort)
           catch
-            case e: Exception =>
+            case NonFatal(e) =>
               logger.error(s"[runner $sessionId] turn failed", e)
               try replyPort.sendError(sessionId, msg.origin, e.getMessage)
-              catch case _: Exception => ()
+              catch case NonFatal(_) => ()
           finally
             try replyPort.onTurnFinished(sessionId, msg.origin)
             catch
-              case e: Exception =>
+              case NonFatal(e) =>
                 logger.error(
                   s"[runner $sessionId] onTurnFinished failed",
                   e
@@ -84,7 +85,7 @@ class AgentRunner(
       contextProvider.append(sessionId, Message.assistant(finalText))
       try replyPort.send(sessionId, msg.origin, finalText)
       catch
-        case e: Exception =>
+        case NonFatal(e) =>
           logger.error(s"[runner $sessionId] port.send failed", e)
 
   /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the

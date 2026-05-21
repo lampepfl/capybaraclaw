@@ -6,7 +6,8 @@ import capybaraclaw.gateway.{
   PortId,
   SessionHandle,
   SessionId,
-  SessionRef
+  SessionRef,
+  UserId
 }
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
@@ -86,7 +87,7 @@ class SlackPort(bot: SlackApi) extends Port:
       case None     => msg.origin.channelId
     Origin(
       port = id,
-      user = msg.userId,
+      user = UserId(msg.userId),
       session = SessionRef.External(SessionHandle(SlackPort.Id, raw))
     )
 
@@ -101,10 +102,6 @@ class SlackPort(bot: SlackApi) extends Port:
   private def decodeHandle(
       handle: SessionHandle
   ): (String, Option[String]) =
-    if handle.kind != SlackPort.Id then
-      throw IllegalArgumentException(
-        s"Slack replies require '${SlackPort.Id}' handle, got '${handle.kind}'"
-      )
     val raw = handle.value
     raw.indexOf('/') match
       case -1 =>

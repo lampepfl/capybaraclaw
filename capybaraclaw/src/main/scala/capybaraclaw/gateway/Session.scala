@@ -15,7 +15,6 @@ final class SessionId private (val value: String):
 
 object SessionId:
   def apply(value: String): SessionId =
-    require(value.nonEmpty, "sessionId must not be empty")
     new SessionId(UUID.fromString(value).toString)
 
   def random(): SessionId =
@@ -42,6 +41,6 @@ object SessionRef:
   */
 case class Origin(
     port: PortId,
-    user: String,
+    user: UserId,
     session: SessionRef
 )

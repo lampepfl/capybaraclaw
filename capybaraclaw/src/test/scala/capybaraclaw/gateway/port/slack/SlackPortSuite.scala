@@ -5,7 +5,8 @@ import capybaraclaw.gateway.{
   PortId,
   SessionHandle,
   SessionId,
-  SessionRef
+  SessionRef,
+  UserId
 }
 import gears.async.{ReadableChannel, UnboundedChannel}
 
@@ -39,17 +40,9 @@ class SlackPortSuite extends munit.FunSuite:
     val sessionId = SessionId.random()
     val origin = Origin(
       port = SlackPort.Id,
-      user = "U1",
+      user = UserId("U1"),
       session = SessionRef.Direct(sessionId)
     )
-
-    intercept[IllegalArgumentException]:
-      port.send(sessionId, origin, "hello")
-
-  test("send rejects handles for a different port kind"):
-    val port = SlackPort(FakeSlackApi())
-    val sessionId = SessionId.random()
-    val origin = slackOrigin(SessionHandle(PortId("other"), "C123"))
 
     intercept[IllegalArgumentException]:
       port.send(sessionId, origin, "hello")
@@ -111,7 +104,7 @@ class SlackPortSuite extends munit.FunSuite:
   private def slackOrigin(handle: SessionHandle): Origin =
     Origin(
       port = SlackPort.Id,
-      user = "U1",
+      user = UserId("U1"),
       session = SessionRef.External(handle)
     )
 

@@ -116,7 +116,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
       val sessionId = provider.createSession(WD)
       val before = provider.resumeSession(sessionId).get
 
-      val observed = provider.verifyAndTouchSession(sessionId)
+      val observed = provider.verifyAndTouchSession(sessionId, WD)
       assertEquals(observed.map(_.lastActivity), Some(before.lastActivity))
 
       withConnection(dbPath): conn =>
@@ -133,7 +133,38 @@ class SqliteContextProviderSuite extends munit.FunSuite:
 
   test("verifyAndTouchSession returns None for an unknown session UUID"):
     withProvider(): (provider, _) =>
-      assertEquals(provider.verifyAndTouchSession(SessionId.random()), None)
+      assertEquals(
+        provider.verifyAndTouchSession(SessionId.random(), WD),
+        None
+      )
+
+  test(
+    "verifyAndTouchSession leaves last_activity untouched on workdir mismatch"
+  ):
+    withProvider(sequentialClock()): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+      val createdAt = withConnection(dbPath): conn =>
+        queryRowsPrepared(
+          conn,
+          "SELECT created_at FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        ).head.head
+
+      val observed = provider.verifyAndTouchSession(sessionId, OtherWD)
+      assertEquals(observed.map(_.workdir), Some(WD))
+
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          "SELECT created_at, last_activity FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        )
+        assertEquals(
+          rows.head(0),
+          rows.head(1),
+          "last_activity equals created_at — no touch happened"
+        )
+        assertEquals(rows.head(0), createdAt, "created_at preserved")
 
   test("resolveOrCreateHandle bumps last_activity on an existing handle hit"):
     withProvider(sequentialClock()): (provider, dbPath) =>

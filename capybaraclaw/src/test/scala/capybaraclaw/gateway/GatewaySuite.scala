@@ -11,7 +11,6 @@ import tacit.agents.llm.endpoint.{
   LLMConfig,
   LLMError,
   Message,
-  Content,
   ChatResponse,
   FinishReason,
   Role,
@@ -76,21 +75,6 @@ class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
 class RejectingPort(override val id: PortId) extends FakePort(id):
   override def validateOriginForReply(origin: Origin): Unit =
     throw IllegalArgumentException("invalid reply origin")
-
-class DeltaThenDoneEndpoint(response: ChatResponse) extends Endpoint:
-  def invoke(
-      messages: List[Message],
-      config: LLMConfig
-  ): Result[ChatResponse, LLMError] =
-    Right(response)
-
-  def stream(messages: List[Message], config: LLMConfig)(using
-      Async.Spawn
-  ): ReadableChannel[Result[StreamEvent, LLMError]] =
-    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
-    ch.sendImmediately(Right(StreamEvent.Delta("partial")))
-    ch.sendImmediately(Right(StreamEvent.Done(response)))
-    ch.asReadable
 
 /** In-memory Port that lets tests push inbound messages and capture outbound replies. */
 class FakePort(override val id: PortId) extends Port:
@@ -160,12 +144,16 @@ class FakeContextProvider(
   def resumeSession(id: SessionId): Option[SessionMetadata] =
     sessions.get(id)
 
-  def verifyAndTouchSession(id: SessionId): Option[SessionMetadata] =
+  def verifyAndTouchSession(
+      id: SessionId,
+      expectedWorkdir: String
+  ): Option[SessionMetadata] =
     lock.synchronized:
       sessions
         .get(id)
         .map: m =>
-          sessions.update(id, m.copy(lastActivity = Instant.now))
+          if m.workdir == expectedWorkdir then
+            sessions.update(id, m.copy(lastActivity = Instant.now))
           m
 
   def resolveOrCreateHandle(
@@ -231,11 +219,6 @@ class FakeContextProvider(
 def textResponse(text: String): ChatResponse =
   ChatResponse(Message.assistant(text), FinishReason.Stop)
 
-def toolCallResponse(calls: (String, String, String)*): ChatResponse =
-  val content = calls.map: (id, name, input) =>
-    Content.ToolUse(id, name, input)
-  ChatResponse(Message(Role.Assistant, content.toList), FinishReason.ToolUse)
-
 // --- Tests ---
 
 class GatewaySuite extends munit.FunSuite:
@@ -259,13 +242,13 @@ class GatewaySuite extends munit.FunSuite:
       user: String,
       localId: String
   ): Origin =
-    Origin(port, user, SessionRef.External(handle(localId)))
+    Origin(port, UserId(user), SessionRef.External(handle(localId)))
   private def directOrigin(
       port: PortId,
       user: String,
       sessionId: SessionId
   ): Origin =
-    Origin(port, user, SessionRef.Direct(sessionId))
+    Origin(port, UserId(user), SessionRef.Direct(sessionId))
 
   private def runGateway(
       ports: List[Port],
@@ -500,7 +483,7 @@ class GatewaySuite extends munit.FunSuite:
     ) { _ =>
       val mismatched = Origin(
         port = SlackPort.Id,
-        user = "U1",
+        user = UserId("U1"),
         session = SessionRef.External(SessionHandle(PortId("other"), "C1"))
       )
       port.push(GatewayMessage(mismatched, "hello"))

@@ -102,7 +102,7 @@ class Gateway(
   private def sessionIdFor(origin: Origin): SessionId =
     origin.session match
       case SessionRef.Direct(sessionId) =>
-        contextProvider.verifyAndTouchSession(sessionId) match
+        contextProvider.verifyAndTouchSession(sessionId, workDir) match
           case Some(metadata) if metadata.workdir == workDir =>
             sessionId
           case Some(metadata) =>

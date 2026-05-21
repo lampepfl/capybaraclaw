@@ -91,7 +91,7 @@ class ClawAgent(val workDir: String, initialMessages: List[Message] = Nil):
 
 Path: `capybaraclaw/src/main/scala/capybaraclaw/gateway/` (package `capybaraclaw.gateway`).
 
-Multiplexes inbound messages from N `Port`s into per-thread `ClawAgent` instances. It:
+Multiplexes inbound messages from N `Port`s into per-session `ClawAgent` instances. It:
 - fans in each `Port`'s `incoming` channel,
 - keys each conversation by a canonical UUID `SessionId`; external ids such as Slack channel/thread ids are `SessionHandle`s scoped by session workdir,
 - rehydrates prior history from a `ContextProvider` on first touch, and appends new user/assistant messages as the turn proceeds,
@@ -100,12 +100,13 @@ Multiplexes inbound messages from N `Port`s into per-thread `ClawAgent` instance
 ```scala
 case class SessionId(value: String) // UUID
 opaque type PortId <: String = String
+opaque type UserId <: String = String
 case class SessionHandle(kind: PortId, value: String)
 sealed trait SessionRef
 object SessionRef:
   case class Direct(id: SessionId) extends SessionRef
   case class External(handle: SessionHandle) extends SessionRef
-case class Origin(port: PortId, user: String, session: SessionRef)
+case class Origin(port: PortId, user: UserId, session: SessionRef)
 case class GatewayMessage(origin: Origin, text: String)
 
 trait Port:
@@ -121,7 +122,9 @@ trait Port:
 trait ContextProvider:
   def createSession(workdir: String): SessionId
   def resumeSession(id: SessionId): Option[SessionMetadata]
+  def verifyAndTouchSession(id: SessionId, expectedWorkdir: String): Option[SessionMetadata]
   def resolveOrCreateHandle(workdir: String, handle: SessionHandle): SessionId
+  def touchSession(sessionId: SessionId): Unit
   def load(sessionId: SessionId): List[Message]
   def append(sessionId: SessionId, msg: Message): Unit
 

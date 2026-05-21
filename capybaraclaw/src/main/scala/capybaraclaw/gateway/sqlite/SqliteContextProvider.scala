@@ -55,11 +55,15 @@ class SqliteContextProvider(
     readers.withReader: reader =>
       selectSession(reader, id)
 
-  def verifyAndTouchSession(id: SessionId): Option[SessionMetadata] =
+  def verifyAndTouchSession(
+      id: SessionId,
+      expectedWorkdir: String
+  ): Option[SessionMetadata] =
     writeLock.synchronized:
       inTransaction:
         selectSession(writer, id).map: metadata =>
-          updateLastActivity(writer, id, nowMillis())
+          if metadata.workdir == expectedWorkdir then
+            updateLastActivity(writer, id, nowMillis())
           metadata
 
   def resolveOrCreateHandle(
