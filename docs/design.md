@@ -99,16 +99,17 @@ Multiplexes inbound messages from N `Port`s into per-thread `ClawAgent` instance
 
 ```scala
 case class SessionId(value: String) // UUID
-case class SessionHandle(kind: String, value: String)
+opaque type PortId <: String = String
+case class SessionHandle(kind: PortId, value: String)
 sealed trait SessionRef
 object SessionRef:
   case class Direct(id: SessionId) extends SessionRef
   case class External(handle: SessionHandle) extends SessionRef
-case class Origin(port: String, user: String, session: SessionRef)
+case class Origin(port: PortId, user: String, session: SessionRef)
 case class GatewayMessage(origin: Origin, text: String)
 
 trait Port:
-  def id: String
+  def id: PortId
   def incoming: ReadableChannel[GatewayMessage]
   def validateOriginForReply(origin: Origin): Unit
   def send(sessionId: SessionId, origin: Origin, text: String): Unit

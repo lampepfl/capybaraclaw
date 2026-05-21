@@ -25,7 +25,8 @@ import scala.util.Using
   * read-only connections.
   */
 class SqliteContextProvider(
-    baseDir: Path = SqliteContextProvider.defaultBaseDir
+    baseDir: Path = SqliteContextProvider.defaultBaseDir,
+    nowMillis: () => Long = () => Instant.now.toEpochMilli
 ) extends ContextProvider
     with AutoCloseable:
 
@@ -45,7 +46,7 @@ class SqliteContextProvider(
   def createSession(workdir: String): SessionId =
     writeLock.synchronized:
       val sessionId = SessionId.random()
-      val now = Instant.now.toEpochMilli
+      val now = nowMillis()
       inTransaction:
         insertSession(writer, sessionId, workdir, now)
         sessionId
@@ -58,7 +59,7 @@ class SqliteContextProvider(
     writeLock.synchronized:
       inTransaction:
         selectSession(writer, id).map: metadata =>
-          updateLastActivity(writer, id, Instant.now.toEpochMilli)
+          updateLastActivity(writer, id, nowMillis())
           metadata
 
   def resolveOrCreateHandle(
@@ -69,13 +70,13 @@ class SqliteContextProvider(
       selectHandle(writer, workdir, handle) match
         case Some(sessionId) =>
           inTransaction:
-            updateLastActivity(writer, sessionId, Instant.now.toEpochMilli)
+            updateLastActivity(writer, sessionId, nowMillis())
           sessionId
         case None =>
           try
             inTransaction:
               val sessionId = SessionId.random()
-              val now = Instant.now.toEpochMilli
+              val now = nowMillis()
               insertSession(writer, sessionId, workdir, now)
               insertHandle(writer, sessionId, workdir, handle)
               sessionId
@@ -84,18 +85,14 @@ class SqliteContextProvider(
               selectHandle(writer, workdir, handle) match
                 case Some(sessionId) =>
                   inTransaction:
-                    updateLastActivity(
-                      writer,
-                      sessionId,
-                      Instant.now.toEpochMilli
-                    )
+                    updateLastActivity(writer, sessionId, nowMillis())
                   sessionId
                 case None => throw e
 
   def touchSession(sessionId: SessionId): Unit =
     writeLock.synchronized:
       val updated = inTransaction:
-        updateLastActivity(writer, sessionId, Instant.now.toEpochMilli)
+        updateLastActivity(writer, sessionId, nowMillis())
       if updated != 1 then
         throw IllegalArgumentException(
           s"session not found: ${sessionId.value}"

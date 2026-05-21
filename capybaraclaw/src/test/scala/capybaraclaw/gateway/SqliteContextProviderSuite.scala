@@ -6,7 +6,9 @@ import tacit.agents.llm.endpoint.{Content, Message, Role}
 
 import java.nio.file.{Files, Path}
 import java.sql.{Connection, DriverManager, ResultSet}
+import java.time.Instant
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
+import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
 class SqliteContextProviderSuite extends munit.FunSuite:
@@ -73,9 +75,8 @@ class SqliteContextProviderSuite extends munit.FunSuite:
   test(
     "touchSession preserves created_at and bumps last_activity"
   ):
-    withProvider(): (provider, dbPath) =>
+    withProvider(sequentialClock()): (provider, dbPath) =>
       val sessionId = provider.createSession(WD)
-      Thread.sleep(10)
       provider.touchSession(sessionId)
 
       withConnection(dbPath): conn =>
@@ -111,10 +112,9 @@ class SqliteContextProviderSuite extends munit.FunSuite:
   test(
     "verifyAndTouchSession returns pre-bump metadata and bumps last_activity"
   ):
-    withProvider(): (provider, dbPath) =>
+    withProvider(sequentialClock()): (provider, dbPath) =>
       val sessionId = provider.createSession(WD)
       val before = provider.resumeSession(sessionId).get
-      Thread.sleep(10)
 
       val observed = provider.verifyAndTouchSession(sessionId)
       assertEquals(observed.map(_.lastActivity), Some(before.lastActivity))
@@ -136,7 +136,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
       assertEquals(provider.verifyAndTouchSession(SessionId.random()), None)
 
   test("resolveOrCreateHandle bumps last_activity on an existing handle hit"):
-    withProvider(): (provider, dbPath) =>
+    withProvider(sequentialClock()): (provider, dbPath) =>
       val sessionId = provider.resolveOrCreateHandle(WD, handle("C1"))
       val createdAt = withConnection(dbPath): conn =>
         queryRowsPrepared(
@@ -144,7 +144,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           "SELECT created_at FROM sessions WHERE id = ?",
           List(sessionId.value)
         ).head.head
-      Thread.sleep(10)
 
       val again = provider.resolveOrCreateHandle(WD, handle("C1"))
       assertEquals(again, sessionId)
@@ -387,12 +386,17 @@ class SqliteContextProviderSuite extends munit.FunSuite:
     finally providerA.close()
 
   private def withProvider(
+      nowMillis: () => Long = () => Instant.now.toEpochMilli
   )(body: (SqliteContextProvider, Path) => Unit): Unit =
     val dir = Files.createTempDirectory("claw-sqlite-provider")
     val dbPath = dir.resolve("state.db")
-    val provider = SqliteContextProvider(dir)
+    val provider = SqliteContextProvider(dir, nowMillis)
     try body(provider, dbPath)
     finally provider.close()
+
+  private def sequentialClock(): () => Long =
+    val ticks = AtomicLong(0L)
+    () => ticks.incrementAndGet()
 
   private def withConnection[A](dbPath: Path)(body: Connection => A): A =
     val conn = DriverManager.getConnection(s"jdbc:sqlite:${dbPath.toString}")

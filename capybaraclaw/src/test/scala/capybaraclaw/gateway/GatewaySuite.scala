@@ -187,8 +187,14 @@ class FakeContextProvider(
           sessionId
 
   def touchSession(sessionId: SessionId): Unit =
-    if !sessions.contains(sessionId) then
-      throw IllegalArgumentException(s"session not found: ${sessionId.value}")
+    lock.synchronized:
+      sessions.get(sessionId) match
+        case Some(m) =>
+          sessions.update(sessionId, m.copy(lastActivity = Instant.now))
+        case None =>
+          throw IllegalArgumentException(
+            s"session not found: ${sessionId.value}"
+          )
 
   def load(sessionId: SessionId): List[Message] =
     store.getOrElse(sessionId, Nil)
