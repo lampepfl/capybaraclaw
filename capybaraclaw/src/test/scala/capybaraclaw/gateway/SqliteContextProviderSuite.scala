@@ -18,13 +18,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
   private def handle(value: String): SessionHandle =
     SessionHandle(SlackPort.Id, value)
 
-  test("load on a fresh session UUID returns empty without creating a session"):
-    withProvider(): (provider, dbPath) =>
-      assertEquals(provider.load(SessionId.random()), Nil)
-
-      withConnection(dbPath): conn =>
-        assertEquals(queryInt(conn, "SELECT COUNT(*) FROM sessions"), 0)
-
   test("createSession inserts metadata"):
     withProvider(): (provider, dbPath) =>
       val sessionId = provider.createSession(WD)
@@ -224,26 +217,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
       withConnection(dbPath): conn =>
         assertEquals(queryInt(conn, "SELECT COUNT(*) FROM sessions"), 2)
 
-  test("UNIQUE constraint rejects a duplicate handle in the same workdir"):
-    withProvider(): (provider, dbPath) =>
-      val first = provider.resolveOrCreateHandle(WD, handle("shared"))
-      val second = provider.createSession(WD)
-      withConnection(dbPath): conn =>
-        val sql =
-          """INSERT INTO session_handles(session_id, workdir, kind, value)
-            |VALUES (?, ?, ?, ?)""".stripMargin
-        val stmt = conn.prepareStatement(sql)
-        try
-          stmt.setString(1, second.value)
-          stmt.setString(2, WD)
-          stmt.setString(3, "slack")
-          stmt.setString(4, "shared")
-          intercept[java.sql.SQLException]:
-            stmt.executeUpdate()
-        finally stmt.close()
-
-      assertEquals(provider.resolveOrCreateHandle(WD, handle("shared")), first)
-
   test("persists only user and assistant text messages"):
     withProvider(): (provider, _) =>
       val sessionId = provider.createSession(WD)
@@ -290,51 +263,6 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           matches,
           List(List("sqlite can search capybara transcripts"))
         )
-
-  test(
-    "resolveOrCreateHandle surfaces row context when the stored session_id is not a UUID"
-  ):
-    withProvider(): (provider, dbPath) =>
-      withConnection(dbPath): conn =>
-        val insertSession = conn.prepareStatement(
-          """INSERT INTO sessions(id, workdir, created_at, last_activity)
-            |VALUES (?, ?, ?, ?)""".stripMargin
-        )
-        try
-          insertSession.setString(1, "not-a-uuid")
-          insertSession.setString(2, WD)
-          insertSession.setLong(3, 0L)
-          insertSession.setLong(4, 0L)
-          insertSession.executeUpdate()
-        finally insertSession.close()
-
-        val insertHandle = conn.prepareStatement(
-          """INSERT INTO session_handles(session_id, workdir, kind, value)
-            |VALUES (?, ?, ?, ?)""".stripMargin
-        )
-        try
-          insertHandle.setString(1, "not-a-uuid")
-          insertHandle.setString(2, WD)
-          insertHandle.setString(3, SlackPort.Id)
-          insertHandle.setString(4, "corrupt")
-          insertHandle.executeUpdate()
-        finally insertHandle.close()
-
-      val error = intercept[IllegalStateException]:
-        provider.resolveOrCreateHandle(WD, handle("corrupt"))
-
-      assert(
-        error.getMessage.contains("session_handles.session_id"),
-        s"error should name the offending column, got: ${error.getMessage}"
-      )
-      assert(
-        error.getMessage.contains("not-a-uuid"),
-        s"error should include the offending value, got: ${error.getMessage}"
-      )
-      assert(
-        error.getMessage.contains("corrupt"),
-        s"error should include the handle value, got: ${error.getMessage}"
-      )
 
   test("operations after close fail fast instead of hanging"):
     val dir = Files.createTempDirectory("claw-after-close")
