@@ -71,7 +71,7 @@ class Gateway(
           else
             try
               port.validateOriginForReply(msg.origin)
-              val sessionId = sessionIdFor(msg.origin)
+              val sessionId = resolveSessionId(msg.origin)
               val runner = getOrCreateRunner(sessionId)
               runner.deliver(RoutedGatewayMessage(msg, port))
             catch
@@ -105,7 +105,7 @@ class Gateway(
           runners.update(sessionId, runner)
           runner
 
-  private def sessionIdFor(origin: Origin): SessionId =
+  private def resolveSessionId(origin: Origin): SessionId =
     origin.session match
       case SessionRef.Direct(sessionId) =>
         contextProvider.verifyAndTouchSession(sessionId, workDir) match
