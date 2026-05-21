@@ -46,7 +46,7 @@ class SlackPort(bot: SlackApi) extends Port:
           running = false
 
   override def validateOriginForReply(origin: Origin): Unit =
-    val _ = handleFor(origin)
+    val _ = decodeHandle(handleFor(origin))
 
   override def rejectInbound(origin: Origin, text: String): Unit =
     origin.session match
@@ -93,9 +93,7 @@ class SlackPort(bot: SlackApi) extends Port:
 
   private def handleFor(origin: Origin): SessionHandle =
     origin.session match
-      case SessionRef.External(handle) =>
-        decodeHandle(handle)
-        handle
+      case SessionRef.External(handle) => handle
       case SessionRef.Direct(_) =>
         throw IllegalArgumentException("Slack replies require a session handle")
 
