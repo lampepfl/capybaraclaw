@@ -40,7 +40,8 @@ class SlackPort(bot: SlackApi) extends Port:
       bot.messageChannel.read() match
         case Right(slackMsg) =>
           val origin = toOrigin(slackMsg)
-          logIn(origin, slackMsg.text)
+          val handle = getSlackHandle(origin)
+          logIncomingMessage(handle, origin.user, slackMsg.text)
           outCh.sendImmediately(GatewayMessage(origin, slackMsg.text))
         case Left(_) =>
           running = false
@@ -119,20 +120,21 @@ class SlackPort(bot: SlackApi) extends Port:
     s""":warning: *Capybara Claw could not process that message*
        |```$text```""".stripMargin
 
-  private def logIn(origin: Origin, text: String): Unit =
-    val handleValue = origin.session match
-      case SessionRef.External(handle) => handle.value
-      case SessionRef.Direct(_)        => "<direct-session>"
+  private def logIncomingMessage(
+      handle: SessionHandle,
+      user: UserId,
+      text: String
+  ): Unit =
     logger.info(
       "[slack <-] ({}) {} ({} chars)",
-      handleValue,
-      origin.user,
+      handle.value,
+      user,
       text.length
     )
     logger.debug(
       "[slack <-] ({}) {}: {}",
-      handleValue,
-      origin.user,
+      handle.value,
+      user,
       snippet(text)
     )
 
