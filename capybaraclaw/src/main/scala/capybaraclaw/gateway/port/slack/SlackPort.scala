@@ -59,7 +59,14 @@ class SlackPort(bot: SlackApi) extends Port:
               s"[slack] failed to deliver reject for handle ${handle.value}",
               e
             )
-      case _ => super.rejectInbound(origin, text)
+      case SessionRef.Direct(sessionId) =>
+        logger.warn(
+          "[slack] dropping reject for direct session {}: {}",
+          sessionId.value,
+          text
+        )
+      case SessionRef.External(_) =>
+        ()
 
   def send(sessionId: SessionId, origin: Origin, text: String): Unit =
     val handle = handleFor(origin)

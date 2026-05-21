@@ -14,8 +14,15 @@ trait ContextProvider:
   /** Look up a canonical session by UUID. */
   def resumeSession(id: SessionId): Option[SessionMetadata]
 
-  /** Resolve an external handle to its canonical session UUID, creating both the
-    * session and handle when absent.
+  /** Look up a canonical session by UUID and bump `last_activity` if found.
+    * Returns the metadata as it was before the bump (so callers can still
+    * inspect the pre-touch state, e.g. created_at).
+    */
+  def verifyAndTouchSession(id: SessionId): Option[SessionMetadata]
+
+  /** Resolve an external handle to its canonical session UUID, creating both
+    * the session and handle when absent. Bumps `last_activity` on a hit so the
+    * caller does not need a follow-up `touchSession`.
     */
   def resolveOrCreateHandle(
       workdir: String,

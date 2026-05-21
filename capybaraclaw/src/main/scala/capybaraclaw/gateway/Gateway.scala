@@ -66,7 +66,6 @@ class Gateway(
             try
               port.validateOriginForReply(msg.origin)
               val sessionId = sessionIdFor(msg.origin)
-              contextProvider.touchSession(sessionId)
               val runner = getOrCreateRunner(msg.origin, sessionId)
               runner.deliver(msg)
             catch
@@ -103,7 +102,7 @@ class Gateway(
   private def sessionIdFor(origin: Origin): SessionId =
     origin.session match
       case SessionRef.Direct(sessionId) =>
-        contextProvider.resumeSession(sessionId) match
+        contextProvider.verifyAndTouchSession(sessionId) match
           case Some(metadata) if metadata.workdir == workDir =>
             sessionId
           case Some(metadata) =>

@@ -108,6 +108,60 @@ class SqliteContextProviderSuite extends munit.FunSuite:
         s"error should mention the missing session id, got: ${error.getMessage}"
       )
 
+  test(
+    "verifyAndTouchSession returns pre-bump metadata and bumps last_activity"
+  ):
+    withProvider(): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+      val before = provider.resumeSession(sessionId).get
+      Thread.sleep(10)
+
+      val observed = provider.verifyAndTouchSession(sessionId)
+      assertEquals(observed.map(_.lastActivity), Some(before.lastActivity))
+
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          "SELECT created_at, last_activity FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        )
+        assertNotEquals(
+          rows.head(0),
+          rows.head(1),
+          "last_activity advanced past created_at"
+        )
+
+  test("verifyAndTouchSession returns None for an unknown session UUID"):
+    withProvider(): (provider, _) =>
+      assertEquals(provider.verifyAndTouchSession(SessionId.random()), None)
+
+  test("resolveOrCreateHandle bumps last_activity on an existing handle hit"):
+    withProvider(): (provider, dbPath) =>
+      val sessionId = provider.resolveOrCreateHandle(WD, handle("C1"))
+      val createdAt = withConnection(dbPath): conn =>
+        queryRowsPrepared(
+          conn,
+          "SELECT created_at FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        ).head.head
+      Thread.sleep(10)
+
+      val again = provider.resolveOrCreateHandle(WD, handle("C1"))
+      assertEquals(again, sessionId)
+
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          "SELECT created_at, last_activity FROM sessions WHERE id = ?",
+          List(sessionId.value)
+        )
+        assertEquals(rows.head(0), createdAt, "created_at preserved")
+        assertNotEquals(
+          rows.head(1),
+          createdAt,
+          "last_activity advanced past created_at"
+        )
+
   test("resolveOrCreateHandle tolerates concurrent first writers"):
     val dir = Files.createTempDirectory("claw-concurrent-first-handle")
     val providerA = SqliteContextProvider(dir)
@@ -236,6 +290,51 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           matches,
           List(List("sqlite can search capybara transcripts"))
         )
+
+  test(
+    "resolveOrCreateHandle surfaces row context when the stored session_id is not a UUID"
+  ):
+    withProvider(): (provider, dbPath) =>
+      withConnection(dbPath): conn =>
+        val insertSession = conn.prepareStatement(
+          """INSERT INTO sessions(id, workdir, created_at, last_activity)
+            |VALUES (?, ?, ?, ?)""".stripMargin
+        )
+        try
+          insertSession.setString(1, "not-a-uuid")
+          insertSession.setString(2, WD)
+          insertSession.setLong(3, 0L)
+          insertSession.setLong(4, 0L)
+          insertSession.executeUpdate()
+        finally insertSession.close()
+
+        val insertHandle = conn.prepareStatement(
+          """INSERT INTO session_handles(session_id, workdir, kind, value)
+            |VALUES (?, ?, ?, ?)""".stripMargin
+        )
+        try
+          insertHandle.setString(1, "not-a-uuid")
+          insertHandle.setString(2, WD)
+          insertHandle.setString(3, SlackPort.Id)
+          insertHandle.setString(4, "corrupt")
+          insertHandle.executeUpdate()
+        finally insertHandle.close()
+
+      val error = intercept[IllegalStateException]:
+        provider.resolveOrCreateHandle(WD, handle("corrupt"))
+
+      assert(
+        error.getMessage.contains("session_handles.session_id"),
+        s"error should name the offending column, got: ${error.getMessage}"
+      )
+      assert(
+        error.getMessage.contains("not-a-uuid"),
+        s"error should include the offending value, got: ${error.getMessage}"
+      )
+      assert(
+        error.getMessage.contains("corrupt"),
+        s"error should include the handle value, got: ${error.getMessage}"
+      )
 
   test("operations after close fail fast instead of hanging"):
     val dir = Files.createTempDirectory("claw-after-close")

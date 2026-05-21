@@ -160,14 +160,27 @@ class FakeContextProvider(
   def resumeSession(id: SessionId): Option[SessionMetadata] =
     sessions.get(id)
 
+  def verifyAndTouchSession(id: SessionId): Option[SessionMetadata] =
+    lock.synchronized:
+      sessions
+        .get(id)
+        .map: m =>
+          sessions.update(id, m.copy(lastActivity = Instant.now))
+          m
+
   def resolveOrCreateHandle(
       workdir: String,
       handle: SessionHandle
   ): SessionId =
     lock.synchronized:
       handles.get((workdir, handle)) match
-        case Some(sessionId) => sessionId
-        case None            =>
+        case Some(sessionId) =>
+          sessions
+            .get(sessionId)
+            .foreach: m =>
+              sessions.update(sessionId, m.copy(lastActivity = Instant.now))
+          sessionId
+        case None =>
           val sessionId = deterministicSessionId(workdir, handle)
           sessions.update(sessionId, metadata(sessionId, workdir))
           handles.update((workdir, handle), sessionId)
@@ -491,12 +504,16 @@ class GatewaySuite extends munit.FunSuite:
       assertEquals(created.get, 0)
     }
 
-  test("recovers reader loop after session resolution or touch failure"):
-    val touchAttempts = AtomicInteger(0)
+  test("recovers reader loop after session resolution failure"):
+    val resolveAttempts = AtomicInteger(0)
     val cp = new FakeContextProvider():
-      override def touchSession(sessionId: SessionId): Unit =
-        if touchAttempts.incrementAndGet() == 1 then
+      override def resolveOrCreateHandle(
+          workdir: String,
+          handle: SessionHandle
+      ): SessionId =
+        if resolveAttempts.incrementAndGet() == 1 then
           throw RuntimeException("temporary sqlite failure")
+        super.resolveOrCreateHandle(workdir, handle)
 
     val port = FakePort(SlackPort.Id)
     val created = AtomicInteger(0)

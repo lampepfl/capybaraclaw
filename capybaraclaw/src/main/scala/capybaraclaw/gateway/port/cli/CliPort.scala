@@ -79,17 +79,17 @@ class CliPort(
         printGoodbye(finalState.turnCount)
       finally cleanup()
 
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
+  def send(_sessionId: SessionId, origin: Origin, text: String): Unit =
     offerEvent(AssistantText(text))
 
   override def sendError(
-      sessionId: SessionId,
+      _sessionId: SessionId,
       origin: Origin,
       text: String
   ): Unit =
     offerEvent(ErrorText(text))
 
-  override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
+  override def onTurnFinished(_sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
   def shutdown(): Unit =

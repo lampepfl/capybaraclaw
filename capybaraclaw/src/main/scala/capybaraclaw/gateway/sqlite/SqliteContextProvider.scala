@@ -54,6 +54,13 @@ class SqliteContextProvider(
     readers.withReader: reader =>
       selectSession(reader, id)
 
+  def verifyAndTouchSession(id: SessionId): Option[SessionMetadata] =
+    writeLock.synchronized:
+      inTransaction:
+        selectSession(writer, id).map: metadata =>
+          updateLastActivity(writer, id, Instant.now.toEpochMilli)
+          metadata
+
   def resolveOrCreateHandle(
       workdir: String,
       handle: SessionHandle
@@ -61,6 +68,8 @@ class SqliteContextProvider(
     writeLock.synchronized:
       selectHandle(writer, workdir, handle) match
         case Some(sessionId) =>
+          inTransaction:
+            updateLastActivity(writer, sessionId, Instant.now.toEpochMilli)
           sessionId
         case None =>
           try
@@ -72,21 +81,25 @@ class SqliteContextProvider(
               sessionId
           catch
             case e: SQLException =>
-              selectHandle(writer, workdir, handle).getOrElse(throw e)
+              selectHandle(writer, workdir, handle) match
+                case Some(sessionId) =>
+                  inTransaction:
+                    updateLastActivity(
+                      writer,
+                      sessionId,
+                      Instant.now.toEpochMilli
+                    )
+                  sessionId
+                case None => throw e
 
   def touchSession(sessionId: SessionId): Unit =
     writeLock.synchronized:
-      val sql =
-        "UPDATE sessions SET last_activity = ? WHERE id = ?"
-      SqliteJdbc.withStatement(writer, sql): stmt =>
-        stmt.setLong(1, Instant.now.toEpochMilli)
-        stmt.setString(2, sessionId.value)
-        val updated = stmt.executeUpdate()
-        if updated != 1 then
-          throw IllegalArgumentException(
-            s"session not found: ${sessionId.value}"
-          )
-        ()
+      val updated = inTransaction:
+        updateLastActivity(writer, sessionId, Instant.now.toEpochMilli)
+      if updated != 1 then
+        throw IllegalArgumentException(
+          s"session not found: ${sessionId.value}"
+        )
 
   def load(sessionId: SessionId): List[Message] =
     readers.withReader: reader =>
@@ -198,6 +211,17 @@ class SqliteContextProvider(
       stmt.executeUpdate()
       ()
 
+  private def updateLastActivity(
+      conn: Connection,
+      sessionId: SessionId,
+      nowEpochMillis: Long
+  ): Int =
+    val sql = "UPDATE sessions SET last_activity = ? WHERE id = ?"
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setLong(1, nowEpochMillis)
+      stmt.setString(2, sessionId.value)
+      stmt.executeUpdate()
+
   private def selectHandle(
       conn: Connection,
       workdir: String,
@@ -212,7 +236,14 @@ class SqliteContextProvider(
       stmt.setString(2, handle.kind)
       stmt.setString(3, handle.value)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then Some(SessionId(rs.getString("session_id")))
+        if rs.next() then
+          val raw = rs.getString("session_id")
+          Some(
+            parseSessionId(
+              raw,
+              s"session_handles.session_id for workdir='$workdir', kind='${handle.kind}', value='${handle.value}'"
+            )
+          )
         else None
 
   private def selectSession(
@@ -227,15 +258,25 @@ class SqliteContextProvider(
       stmt.setString(1, sessionId.value)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         if rs.next() then
+          val rawId = rs.getString("id")
           Some(
             SessionMetadata(
-              SessionId(rs.getString("id")),
+              parseSessionId(rawId, s"sessions.id (looked up by '$rawId')"),
               rs.getString("workdir"),
               Instant.ofEpochMilli(rs.getLong("created_at")),
               Instant.ofEpochMilli(rs.getLong("last_activity"))
             )
           )
         else None
+
+  private def parseSessionId(raw: String, context: String): SessionId =
+    try SessionId(raw)
+    catch
+      case e: IllegalArgumentException =>
+        throw IllegalStateException(
+          s"corrupt session id in $context: '$raw' is not a valid UUID",
+          e
+        )
 
   private def persistableText(msg: Message): Option[(String, String)] =
     val role = msg.role match
