@@ -121,10 +121,8 @@ trait Port:
 
 trait ContextProvider:
   def createSession(workdir: String): SessionId
-  def resumeSession(id: SessionId): Option[SessionMetadata]
   def verifyAndTouchSession(id: SessionId, expectedWorkdir: String): Option[SessionMetadata]
   def resolveOrCreateHandle(workdir: String, handle: SessionHandle): SessionId
-  def touchSession(sessionId: SessionId): Unit
   def load(sessionId: SessionId): List[Message]
   def append(sessionId: SessionId, msg: Message): Unit
 
