@@ -190,6 +190,14 @@ class FakeContextProvider(
           handles.update((workdir, handle), sessionId)
           sessionId
 
+  def findSession(id: SessionId): Option[SessionMetadata] =
+    lock.synchronized:
+      sessions.get(id)
+
+  def listSessions(): List[SessionMetadata] =
+    lock.synchronized:
+      sessions.values.toList.sortBy(_.lastActivity).reverse
+
   def load(sessionId: SessionId): List[Message] =
     store.getOrElse(sessionId, Nil)
 

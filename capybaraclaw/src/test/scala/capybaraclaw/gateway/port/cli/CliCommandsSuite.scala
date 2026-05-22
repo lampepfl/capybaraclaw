@@ -22,3 +22,21 @@ class CliCommandsSuite extends FunSuite:
     assert(!CliCommands.isQuit("quitting"))
     assert(!CliCommands.isQuit("q"))
     assert(!CliCommands.isQuit("quit now"))
+
+  test("isSessions / isCurrent: exact slash commands"):
+    assert(CliCommands.isSessions("/sessions"))
+    assert(CliCommands.isSessions("  /SESSIONS  "))
+    assert(CliCommands.isCurrent("/current"))
+    assert(!CliCommands.isSessions("sessions"))
+    assert(!CliCommands.isCurrent("current"))
+
+  test("commands do not collide"):
+    assert(!CliCommands.isQuit("/sessions"))
+    assert(!CliCommands.isSessions("/quit"))
+    assert(!CliCommands.isCurrent("/sessions"))
+
+  test("isSlashCommand: any leading slash"):
+    assert(CliCommands.isSlashCommand("/anything"))
+    assert(CliCommands.isSlashCommand("  /foo bar"))
+    assert(!CliCommands.isSlashCommand("hello"))
+    assert(!CliCommands.isSlashCommand(""))

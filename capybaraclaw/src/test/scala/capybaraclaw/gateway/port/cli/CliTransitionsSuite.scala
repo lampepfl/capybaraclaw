@@ -51,6 +51,29 @@ class CliTransitionsSuite extends FunSuite:
     val r = transition(idle, UserInput("/exit"), ctx)
     assertEquals(r.state.running, false)
 
+  test("UserInput /sessions: emits RenderSessionsList, state unchanged"):
+    val r = transition(idle, UserInput("/sessions"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(r.effects, List(RenderSessionsList))
+
+  test("UserInput /current: emits RenderCurrentInfo, state unchanged"):
+    val r = transition(idle, UserInput("/current"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(r.effects, List(RenderCurrentInfo))
+
+  test("UserInput /sessions during turn-in-flight: still listed"):
+    val r = transition(midTurn, UserInput("/sessions"), ctx)
+    assertEquals(r.state, midTurn)
+    assertEquals(r.effects, List(RenderSessionsList))
+
+  test("UserInput /garbage: emits Unknown command error"):
+    val r = transition(idle, UserInput("/garbage"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(
+      r.effects,
+      List(Render(Role.Error, "Unknown command: /garbage"))
+    )
+
   test("UserInput while turn-in-flight: renders error, state unchanged"):
     val r = transition(midTurn, UserInput("hi"), ctx)
     assertEquals(r.state, midTurn)
