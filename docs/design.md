@@ -91,33 +91,47 @@ class ClawAgent(val workDir: String, initialMessages: List[Message] = Nil):
 
 Path: `capybaraclaw/src/main/scala/capybaraclaw/gateway/` (package `capybaraclaw.gateway`).
 
-Multiplexes inbound messages from N `Port`s into per-thread `ClawAgent` instances. It:
+Multiplexes inbound messages from N `Port`s into per-session `ClawAgent` instances. It:
 - fans in each `Port`'s `incoming` channel,
-- keys each conversation by `ContextKey(port, thread)` — one agent + one REPL + one transcript per thread, shared across users,
+- keys each conversation by a canonical UUID `SessionId`; external ids such as Slack channel/thread ids are `SessionHandle`s scoped by session workdir,
 - rehydrates prior history from a `ContextProvider` on first touch, and appends new user/assistant messages as the turn proceeds,
 - routes replies back to the originating port.
 
 ```scala
-case class Origin(port: String, thread: String, user: String)
-case class ContextKey(port: String, thread: String)
+case class SessionId(value: String) // UUID
+opaque type PortId <: String = String
+opaque type UserId <: String = String
+case class SessionHandle(kind: PortId, value: String)
+sealed trait SessionRef
+object SessionRef:
+  case class Direct(id: SessionId) extends SessionRef
+  case class External(handle: SessionHandle) extends SessionRef
+case class Origin(port: PortId, user: UserId, session: SessionRef)
 case class GatewayMessage(origin: Origin, text: String)
 
 trait Port:
-  def id: String
+  def id: PortId
   def incoming: ReadableChannel[GatewayMessage]
-  def send(key: ContextKey, text: String): Unit
+  def validateOriginForReply(origin: Origin): Unit
+  def send(sessionId: SessionId, origin: Origin, text: String): Unit
+  def sendError(sessionId: SessionId, origin: Origin, text: String): Unit
+  def onTurnFinished(sessionId: SessionId, origin: Origin): Unit
+  def rejectInbound(origin: Origin, text: String): Unit
   def shutdown(): Unit
 
 trait ContextProvider:
-  def load(key: ContextKey): List[Message]
-  def append(key: ContextKey, msg: Message): Unit
+  def createSession(workdir: String): SessionId
+  def verifyAndTouchSession(id: SessionId, expectedWorkdir: String): Option[SessionMetadata]
+  def resolveOrCreateHandle(workdir: String, handle: SessionHandle): SessionId
+  def load(sessionId: SessionId): List[Message]
+  def append(sessionId: SessionId, msg: Message): Unit
 
 class Gateway(workDir: String, ports: List[Port], contextProvider: ContextProvider):
   def run()(using Async.Spawn): Unit
   def shutdown(): Unit
 ```
 
-Mid-turn messages are forwarded to the active `AgentRun` via `steer`. `SqliteContextProvider` persists session-native transcripts to `.claw/state.db`. The database stores one row per `(port, thread)` in `sessions`, ordered text turns in `messages`, and an FTS5 index in `messages_fts`; only user and assistant text content is persisted. Existing `.claw/history/**/*.jsonl` files are archival and are not read by the gateway.
+Mid-turn messages are forwarded to the active `AgentRun` via `steer`. `SqliteContextProvider` persists session-native transcripts to the global `~/.claw/state.db`. The database stores one row per UUID in `sessions`, external mappings in `session_handles`, ordered text turns in `messages`, and an FTS5 index in `messages_fts`; only user and assistant text content is persisted. Existing `.claw/history/**/*.jsonl` files are archival and are not read by the gateway.
 
 Schema is managed by Flyway; migrations live as plain SQL under `capybaraclaw/src/main/resources/db/migration/V*.sql` and are applied automatically on startup. The provider holds **one writer connection** for all writes plus a **pool of read-only connections** so reads do not serialise behind the writer. Writes are serialised via `writeLock`; reads run unsynchronised on pool connections in WAL mode.
 

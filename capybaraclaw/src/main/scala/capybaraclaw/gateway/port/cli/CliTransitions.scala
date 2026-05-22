@@ -1,5 +1,6 @@
 package capybaraclaw.gateway.port.cli
 
+import capybaraclaw.Throwables
 import capybaraclaw.gateway.{GatewayMessage, Origin}
 
 /** Pure logic of the CLI port. Runner lives in [[CliPort]]. */
@@ -104,7 +105,10 @@ object CliTransitions:
           TransitionResult(
             state,
             List(
-              Render(Role.Error, s"Input reader failed: ${errorMessage(error)}")
+              Render(
+                Role.Error,
+                s"Input reader failed: ${Throwables.errorMessage(error)}"
+              )
             )
           )
         else TransitionResult(state, Nil)
@@ -184,12 +188,6 @@ object CliTransitions:
     if tick % SpinnerBlinkEveryTicks == SpinnerBlinkEveryTicks - 1 then
       SpinnerFrames(1)
     else SpinnerFrames(0)
-
-  def errorMessage(error: Throwable): String =
-    Option(error.getMessage)
-      .filter(_.nonEmpty)
-      .getOrElse:
-        error.getClass.getSimpleName
 
   def formatDuration(elapsedSec: Long): String =
     if elapsedSec < 60 then s"${elapsedSec}s"

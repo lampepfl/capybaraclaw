@@ -1,5 +1,6 @@
 package capybaraclaw.gateway.port.cli
 
+import capybaraclaw.Throwables
 import munit.FunSuite
 
 class CliTransitionsFormattingSuite extends FunSuite:
@@ -96,9 +97,9 @@ class CliTransitionsFormattingSuite extends FunSuite:
   /** errorMessage */
 
   test("errorMessage: uses the throwable's message when present"):
-    assertEquals(CliTransitions.errorMessage(RuntimeException("boom")), "boom")
+    assertEquals(Throwables.errorMessage(RuntimeException("boom")), "boom")
     assertEquals(
-      CliTransitions.errorMessage(IllegalArgumentException("bad arg")),
+      Throwables.errorMessage(IllegalArgumentException("bad arg")),
       "bad arg"
     )
 
@@ -106,11 +107,11 @@ class CliTransitionsFormattingSuite extends FunSuite:
     "errorMessage: falls back to class simple name when message is null/empty"
   ):
     assertEquals(
-      CliTransitions.errorMessage(RuntimeException()),
+      Throwables.errorMessage(RuntimeException()),
       "RuntimeException"
     )
     assertEquals(
-      CliTransitions.errorMessage(IllegalStateException("")),
+      Throwables.errorMessage(IllegalStateException("")),
       "IllegalStateException"
     )
 
