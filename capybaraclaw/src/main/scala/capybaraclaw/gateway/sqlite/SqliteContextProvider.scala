@@ -248,7 +248,7 @@ class SqliteContextProvider(
       sessionId: SessionId
   ): Option[SessionMetadata] =
     val sql =
-      """SELECT id, workdir, last_activity
+      """SELECT id, workdir, created_at, last_activity
         |FROM sessions
         |WHERE id = ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
@@ -258,7 +258,7 @@ class SqliteContextProvider(
 
   private def selectAllSessions(conn: Connection): List[SessionMetadata] =
     val sql =
-      """SELECT id, workdir, last_activity
+      """SELECT id, workdir, created_at, last_activity
         |FROM sessions
         |ORDER BY last_activity DESC""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
@@ -274,6 +274,7 @@ class SqliteContextProvider(
     SessionMetadata(
       parseSessionId(rawId, s"sessions.id (looked up by '$rawId')"),
       rs.getString("workdir"),
+      Instant.ofEpochMilli(rs.getLong("created_at")),
       Instant.ofEpochMilli(rs.getLong("last_activity"))
     )
 

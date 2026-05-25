@@ -214,7 +214,8 @@ class FakeContextProvider(
       sessionId: SessionId,
       workdir: String
   ): SessionMetadata =
-    SessionMetadata(sessionId, workdir, Instant.now)
+    val now = Instant.now
+    SessionMetadata(sessionId, workdir, now, now)
 
   private def deterministicSessionId(
       workdir: String,

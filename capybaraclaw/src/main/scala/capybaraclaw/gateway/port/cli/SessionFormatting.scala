@@ -51,7 +51,7 @@ object SessionFormatting:
           (tildify(workdir, homeDir) :: rows).mkString("\n")
       (header :: sections).mkString("\n\n")
 
-  private def formatAge(elapsedSec: Long): String =
+  def formatAge(elapsedSec: Long): String =
     if elapsedSec < 60 then "just now"
     else if elapsedSec < 3600 then s"${elapsedSec / 60}m ago"
     else if elapsedSec < 86400 then s"${elapsedSec / 3600}h ago"

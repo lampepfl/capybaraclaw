@@ -43,6 +43,8 @@ import org.jline.reader.impl.completer.StringsCompleter
 import org.jline.terminal.{Attributes, Terminal, TerminalBuilder}
 import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 
+import tacit.agents.llm.endpoint.Role as MessageRole
+
 /** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
     override val id: PortId = CliPort.Id,
@@ -68,6 +70,15 @@ class CliPort(
     if terminalOwnsStdio then None else Option(Status.getStatus(terminal, true))
 
   private val sessionStartMillis = System.currentTimeMillis()
+
+  private val sessionCreatedMillis: Long =
+    contextProvider
+      .findSession(sessionId)
+      .map(_.createdAt.toEpochMilli)
+      .getOrElse(sessionStartMillis)
+
+  private val priorTurnCount: Int =
+    contextProvider.load(sessionId).count(_.role == MessageRole.User)
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
@@ -219,12 +230,12 @@ class CliPort(
     catch case NonFatal(_) => true
 
   private def printGoodbye(turns: Int): Unit =
-    val elapsedSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
-    val duration = formatDuration(elapsedSec)
-    val turnsLabel = if turns == 1 then "1 turn" else s"$turns turns"
+    val uptimeSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
+    val duration = formatDuration(uptimeSec)
+    val totalTurns = priorTurnCount + turns
     val goodbye = rowTight(
       "✦ Goodbye".style(Style.Bold),
-      s" • $turnsLabel • $duration".style(Style.Dim)
+      s" • ${turnsLabel(totalTurns)} • $duration".style(Style.Dim)
     ).render
     val resume = rowTight(
       s"  ↳ to resume:  ${resumeCommand(sessionId)}".style(Style.Dim)
@@ -245,15 +256,27 @@ class CliPort(
     reader.printAbove(sessions.render + "\n")
 
   private def renderCurrentBox(turnCount: Int): Unit =
-    val elapsedSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
-    val current = box()(
-      layout(
-        rowTight(" session:   ".style(Style.Dim), sessionId.toString),
-        rowTight(" workdir:   ".style(Style.Dim), tildify(workDirFile.getPath)),
-        rowTight(" turns:     ".style(Style.Dim), turnsLabel(turnCount)),
-        rowTight(" elapsed:   ".style(Style.Dim), formatDuration(elapsedSec))
-      )
-    ).border(Border.Round)
+    val now = System.currentTimeMillis()
+    val uptimeSec = (now - sessionStartMillis) / 1000
+    val sessionAgeSec = (now - sessionCreatedMillis) / 1000
+    val startedRow = Option.when(sessionAgeSec >= 60)(
+      rowTight(" started:   ".style(Style.Dim), formatAge(sessionAgeSec))
+    )
+    val rows = List(
+      Some(rowTight(" session:   ".style(Style.Dim), sessionId.toString)),
+      Some(
+        rowTight(" workdir:   ".style(Style.Dim), tildify(workDirFile.getPath))
+      ),
+      startedRow,
+      Some(
+        rowTight(
+          " turns:     ".style(Style.Dim),
+          turnsLabel(priorTurnCount + turnCount)
+        )
+      ),
+      Some(rowTight(" uptime:    ".style(Style.Dim), formatDuration(uptimeSec)))
+    ).flatten
+    val current = box()(layout(rows*)).border(Border.Round)
     reader.printAbove(current.render + "\n")
 
   private def printHeader(): Unit =
