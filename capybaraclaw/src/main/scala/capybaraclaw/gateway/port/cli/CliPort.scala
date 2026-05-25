@@ -86,6 +86,8 @@ class CliPort(
     Future:
       try
         printHeader()
+        if status.isDefined then
+          HintWidgets.install(reader, buf => offerEvent(HintTick(buf)))
         offerInputReadPermit()
         val _ = Future(readInputLoop())
         val finalState =
@@ -176,7 +178,10 @@ class CliPort(
           )
           val result = transition(rs.state, ev, ctx)
           applyEffects(rs.copy(state = result.state), result.effects)
-      offerInputReadPermitIfReady(next.state)
+      event match
+        case Some(_: SpinnerTick) | Some(_: HintTick) => ()
+        case _                                        =>
+          offerInputReadPermitIfReady(next.state)
       if next.state.running then loop(next) else next
     loop(initial)
 
@@ -216,6 +221,9 @@ class CliPort(
           rs
         case RenderCurrentInfo =>
           renderCurrentBox(rs.state.turnCount)
+          rs
+        case RenderHintStatus(text) =>
+          renderStatus(text)
           rs
 
   private def renderSpinner(spinner: SpinnerState, now: Long): Unit =
@@ -434,6 +442,7 @@ object CliPort:
       .appName("capybara")
       .terminal(terminal)
       .completer(StringsCompleter(CliCommands.All.toSeq*))
+      .highlighter(CommandHighlighter.instance)
       .build()
     reader.option(LineReader.Option.BRACKETED_PASTE, true)
     reader

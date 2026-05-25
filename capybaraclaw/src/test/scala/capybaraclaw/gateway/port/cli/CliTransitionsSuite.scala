@@ -42,8 +42,8 @@ class CliTransitionsSuite extends FunSuite:
     assertEquals(r.state, idle)
     assertEquals(r.effects, Nil)
 
-  test("UserInput quit: marks running=false, no further effects"):
-    val r = transition(idle, UserInput("quit"), ctx)
+  test("UserInput /quit: marks running=false, no further effects"):
+    val r = transition(idle, UserInput("/quit"), ctx)
     assertEquals(r.state.running, false)
     assertEquals(r.effects, Nil)
 
@@ -71,8 +71,27 @@ class CliTransitionsSuite extends FunSuite:
     assertEquals(r.state, idle)
     assertEquals(
       r.effects,
-      List(Render(Role.Error, "Unknown command: /garbage"))
+      List(Render(Role.Error, "Unknown command: /garbage."))
     )
+
+  test("UserInput /sesions: Unknown command + 'Did you mean' suggestion"):
+    val r = transition(idle, UserInput("/sesions"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(r.effects.size, 1)
+    val text = r.effects.head match
+      case Render(Role.Error, t) => t
+      case other                 => fail(s"unexpected: $other")
+    assert(text.startsWith("Unknown command: /sesions."))
+    assert(text.contains("Did you mean: /sessions"))
+
+  test("UserInput unknown /command while turn-in-flight: still blocked"):
+    val r = transition(midTurn, UserInput("/foobar"), ctx)
+    assertEquals(r.state, midTurn)
+    assertEquals(r.effects.size, 1)
+    assert:
+      r.effects.head match
+        case Render(Role.Error, t) => t.startsWith("Unknown command")
+        case _                     => false
 
   test("UserInput while turn-in-flight: renders error, state unchanged"):
     val r = transition(midTurn, UserInput("hi"), ctx)
@@ -209,4 +228,29 @@ class CliTransitionsSuite extends FunSuite:
   test("InputClosed when idle: no spinner cancel emitted"):
     val r = transition(idle, InputClosed, ctx)
     assertEquals(r.state.running, false)
+    assertEquals(r.effects, Nil)
+
+  /** HintTick */
+
+  test("HintTick with /se buffer: RenderHintStatus contains /sessions"):
+    val r = transition(idle, HintTick("/se"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(r.effects.size, 1)
+    val text = r.effects.head match
+      case RenderHintStatus(t) => t
+      case other               => fail(s"unexpected: $other")
+    assert(text.startsWith("↳ "))
+    assert(text.contains("/sessions"))
+
+  test("HintTick with empty buffer: RenderHintStatus(\"\") clears the line"):
+    val r = transition(idle, HintTick(""), ctx)
+    assertEquals(r.effects, List(RenderHintStatus("")))
+
+  test("HintTick with non-slash text: RenderHintStatus(\"\")"):
+    val r = transition(idle, HintTick("hello world"), ctx)
+    assertEquals(r.effects, List(RenderHintStatus("")))
+
+  test("HintTick during turn-in-flight: no effects (spinner owns status)"):
+    val r = transition(midTurn, HintTick("/se"), ctx)
+    assertEquals(r.state, midTurn)
     assertEquals(r.effects, Nil)

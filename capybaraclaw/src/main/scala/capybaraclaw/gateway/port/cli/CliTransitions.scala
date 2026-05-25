@@ -5,12 +5,14 @@ import capybaraclaw.gateway.{GatewayMessage, Origin}
 
 /** Pure logic of the CLI port. Runner lives in [[CliPort]]. */
 object CliTransitions:
+  import CommandMatching.*
 
   sealed trait CliEvent
   final case class UserInput(raw: String) extends CliEvent
   final case class AssistantText(text: String) extends CliEvent
   final case class ErrorText(text: String) extends CliEvent
   final case class SpinnerTick(nowMillis: Long) extends CliEvent
+  final case class HintTick(buffer: String) extends CliEvent
   final case class InputReadFailed(error: Throwable) extends CliEvent
   case object TurnFinished extends CliEvent
   case object InputClosed extends CliEvent
@@ -53,6 +55,7 @@ object CliTransitions:
     final case class SendOutbound(msg: GatewayMessage) extends CliEffect
     case object RenderSessionsList extends CliEffect
     case object RenderCurrentInfo extends CliEffect
+    final case class RenderHintStatus(text: String) extends CliEffect
 
   final case class TransitionContext(
       now: Long,
@@ -102,6 +105,12 @@ object CliTransitions:
               else Nil
             TransitionResult(state.copy(spinner = Some(ticked)), renderEffect)
 
+      case HintTick(buffer) =>
+        if state.turnInFlight then TransitionResult(state, Nil)
+        else
+          val text = formatHints(topMatches(buffer, HintLimit))
+          TransitionResult(state, List(RenderHintStatus(text)))
+
       case InputReadFailed(error) =>
         if state.running then
           TransitionResult(
@@ -141,7 +150,7 @@ object CliTransitions:
     else if CliCommands.isSlashCommand(trimmed) then
       TransitionResult(
         state,
-        List(Render(Role.Error, s"Unknown command: $trimmed"))
+        List(Render(Role.Error, unknownCommandText(trimmed)))
       )
     else if state.turnInFlight then
       TransitionResult(
