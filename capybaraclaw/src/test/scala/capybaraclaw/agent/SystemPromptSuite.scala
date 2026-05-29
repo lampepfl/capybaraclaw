@@ -9,7 +9,9 @@ class SystemPromptSuite extends munit.FunSuite:
     teardown = SystemPromptSuite.deleteRecursively
   )
 
-  test("renderResource substitutes placeholders and strips the trailing newline"):
+  test(
+    "renderResource substitutes placeholders and strips the trailing newline"
+  ):
     val rendered = SystemPrompt.renderResource(
       "prompts/render-basic.md",
       Map("a" -> "1", "b" -> "2")
@@ -31,38 +33,42 @@ class SystemPromptSuite extends munit.FunSuite:
       "No value for placeholder {{missing}} in template: prompts/bad-template.md"
     )
 
-  workDir.test("build renders every section when config and CLAW.md are present"):
-    dir =>
-      Files.writeString(
-        dir.resolve("CLAW.md"),
-        "Be concise.",
-        StandardCharsets.UTF_8
-      )
-      val config = AgentConfig(
-        workDir = dir.toString,
-        provider = "openrouter",
-        model = "test/model",
-        classifiedPaths = List("secret/")
-      )
+  workDir.test(
+    "build renders every section when config and CLAW.md are present"
+  ): dir =>
+    Files.writeString(
+      dir.resolve("CLAW.md"),
+      "Be concise.",
+      StandardCharsets.UTF_8
+    )
+    val config = AgentConfig(
+      workDir = dir.toString,
+      provider = "openrouter",
+      model = "test/model",
+      classifiedPaths = List("secret/")
+    )
 
-      val expected =
-        SystemPromptSuite.systemSection(config) +
-          "\n\n" +
-          """<classified_paths>
-            |The following paths should be classified:
-            |- secret/
-            |</classified_paths>""".stripMargin +
-          "\n\n" +
-          """<project_instructions>
-            |Be concise.
-            |</project_instructions>""".stripMargin
+    val expected =
+      SystemPromptSuite.systemSection(config) +
+        "\n\n" +
+        """<classified_paths>
+          |The following paths should be classified:
+          |- secret/
+          |</classified_paths>""".stripMargin +
+        "\n\n" +
+        """<project_instructions>
+          |Be concise.
+          |</project_instructions>""".stripMargin
 
-      assertEquals(SystemPrompt.build(config), expected)
+    assertEquals(SystemPrompt.build(config), expected)
 
   workDir.test("build emits only the system section without config or CLAW.md"):
     dir =>
       val config = AgentConfig(workDir = dir.toString)
-      assertEquals(SystemPrompt.build(config), SystemPromptSuite.systemSection(config))
+      assertEquals(
+        SystemPrompt.build(config),
+        SystemPromptSuite.systemSection(config)
+      )
 
 object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
