@@ -1,18 +1,11 @@
 package capybaraclaw.agent
 
-import tacit.core.{Context as TacitContext, Config as TacitConfig}
-import tacit.executor.ReplSession
 import tacit.agents.llm.endpoint.*
 import tacit.agents.llm.agentic.{Agent, AgentRun, AgentState, AgentError}
 import gears.async.Async
-import tacit.agents.llm.utils.IsToolArg
 import tacit.agents.utils.Result
-import io.circe.Json
-import io.circe.syntax.*
-import tacit.library.Interface as TacitLibraryInterface
-import scala.util.Try
 
-case class EvalScalaArgs(code: String) derives IsToolArg
+import capybaraclaw.agent.tools.EvalScalaTool
 
 /** Agent class for Claw. */
 class ClawAgent(
@@ -22,18 +15,8 @@ class ClawAgent(
 ):
   val agentConfig: AgentConfig = AgentConfig.load(workDir)
 
-  private val tacitContext: TacitContext = TacitContext(
-    TacitConfig(
-      libraryJarPath = resolveTacitLibraryJarPath(),
-      libraryConfig = Json.obj(
-        "classifiedPaths" -> agentConfig.classifiedPaths
-          .map(p => java.io.File(workDir, p).getCanonicalPath)
-          .asJson
-      )
-    ),
-    recorder = None
-  )
-  private val repl: ReplSession = ReplSession.create(using tacitContext)
+  private val replEnv: ReplEnvironment =
+    ReplEnvironment(workDir, agentConfig.classifiedPaths)
 
   private given Endpoint = endpointOverride.getOrElse(agentConfig.provider match
     case "anthropic"  => AnthropicEndpoint.createFromEnv()
@@ -48,20 +31,7 @@ class ClawAgent(
       def getInitState = new AgentState:
         val llmConfig = agentConfig.toLLMConfig
 
-    a.handle[EvalScalaArgs](
-      "evaluate_scala",
-      "Evaluate a Scala expression in a persistent REPL session"
-    ): (args, _) =>
-      val result = repl.execute(args.code)
-      if result.success then
-        if result.output.nonEmpty then result.output
-        else "(executed successfully, no output)"
-      else
-        val msg = StringBuilder("Execution failed.\n")
-        if result.output.nonEmpty then
-          msg.append(s"Output:\n${result.output}\n")
-        result.error.foreach(e => msg.append(s"Error:\n$e\n"))
-        msg.toString
+    EvalScalaTool.register(a, replEnv.repl)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue
     // where they left off.
@@ -91,22 +61,3 @@ class ClawAgent(
     if agentConfig.classifiedPaths.nonEmpty then
       println(s"  classify : ${agentConfig.classifiedPaths.mkString(", ")}")
     println()
-
-  private def resolveTacitLibraryJarPath(): String =
-    val fromProperty =
-      Option(System.getProperty("tacit.library.jar")).filter(_.nonEmpty)
-    val fromCodeSource =
-      Try:
-        val url = classOf[
-          TacitLibraryInterface
-        ].getProtectionDomain.getCodeSource.getLocation
-        java.io.File(url.toURI).getAbsolutePath
-      .toOption
-        .filter(_.nonEmpty)
-
-    fromProperty
-      .orElse(fromCodeSource)
-      .getOrElse:
-        throw RuntimeException(
-          "Unable to resolve tacit-library path. Set -Dtacit.library.jar or ensure tacit-library is on classpath."
-        )
