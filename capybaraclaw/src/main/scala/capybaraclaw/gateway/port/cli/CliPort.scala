@@ -2,6 +2,7 @@ package capybaraclaw.gateway.port.cli
 
 import capybaraclaw.agent.AgentConfig
 import capybaraclaw.gateway.{
+  ContextProvider,
   GatewayMessage,
   Origin,
   PortId,
@@ -42,15 +43,19 @@ import org.jline.reader.impl.completer.StringsCompleter
 import org.jline.terminal.{Attributes, Terminal, TerminalBuilder}
 import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
 
+import tacit.agents.llm.endpoint.Role as MessageRole
+
 /** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
     override val id: PortId = CliPort.Id,
     user: UserId = UserId(sys.env.getOrElse("USER", "cli")),
     workDirFile: File = java.io.File(".").getCanonicalFile,
-    sessionId: SessionId
+    sessionId: SessionId,
+    contextProvider: ContextProvider
 ) extends Port:
   import CliPort.*
   import CliTransitions.*
+  import SessionFormatting.*
 
   private val outCh = UnboundedChannel[GatewayMessage]()
   private val events = UnboundedChannel[CliEvent]()
@@ -65,6 +70,15 @@ class CliPort(
     if terminalOwnsStdio then None else Option(Status.getStatus(terminal, true))
 
   private val sessionStartMillis = System.currentTimeMillis()
+
+  private val sessionCreatedMillis: Long =
+    contextProvider
+      .findSession(sessionId)
+      .map(_.createdAt.toEpochMilli)
+      .getOrElse(sessionStartMillis)
+
+  private val priorTurnCount: Int =
+    contextProvider.load(sessionId).count(_.role == MessageRole.User)
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
@@ -197,6 +211,12 @@ class CliPort(
           catch
             case _: ChannelClosedException =>
               rs.copy(state = rs.state.copy(running = false))
+        case RenderSessionsList =>
+          renderSessionsBox()
+          rs
+        case RenderCurrentInfo =>
+          renderCurrentBox(rs.state.turnCount)
+          rs
 
   private def renderSpinner(spinner: SpinnerState, now: Long): Unit =
     val frame = spinnerFrameAt(spinner.frameTick)
@@ -210,14 +230,54 @@ class CliPort(
     catch case NonFatal(_) => true
 
   private def printGoodbye(turns: Int): Unit =
-    val elapsedSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
-    val duration = formatDuration(elapsedSec)
-    val turnsLabel = if turns == 1 then "1 turn" else s"$turns turns"
+    val uptimeSec = (System.currentTimeMillis() - sessionStartMillis) / 1000
+    val duration = formatDuration(uptimeSec)
+    val totalTurns = priorTurnCount + turns
     val goodbye = rowTight(
       "✦ Goodbye".style(Style.Bold),
-      s" • $turnsLabel • $duration".style(Style.Dim)
+      s" • ${turnsLabel(totalTurns)} • $duration".style(Style.Dim)
     ).render
-    reader.printAbove("\n" + goodbye + "\n")
+    val resume = rowTight(
+      s"  ↳ to resume:  ${resumeCommand(sessionId)}".style(Style.Dim)
+    ).render
+    reader.printAbove("\n" + goodbye + "\n" + resume + "\n")
+
+  private def renderSessionsBox(): Unit =
+    val entries = contextProvider
+      .listSessions()
+      .map(m => (m.id, m.workdir, m.lastActivity.toEpochMilli))
+    val text = formatSessionsList(
+      entries,
+      Some(sessionId),
+      System.currentTimeMillis()
+    )
+    val lines = text.linesIterator.toList
+    val sessions = box()(layout(lines*)).border(Border.Round)
+    reader.printAbove(sessions.render + "\n")
+
+  private def renderCurrentBox(turnCount: Int): Unit =
+    val now = System.currentTimeMillis()
+    val uptimeSec = (now - sessionStartMillis) / 1000
+    val sessionAgeSec = (now - sessionCreatedMillis) / 1000
+    val startedRow = Option.when(sessionAgeSec >= 60)(
+      rowTight(" started:   ".style(Style.Dim), formatAge(sessionAgeSec))
+    )
+    val rows = List(
+      Some(rowTight(" session:   ".style(Style.Dim), sessionId.toString)),
+      Some(
+        rowTight(" workdir:   ".style(Style.Dim), tildify(workDirFile.getPath))
+      ),
+      startedRow,
+      Some(
+        rowTight(
+          " turns:     ".style(Style.Dim),
+          turnsLabel(priorTurnCount + turnCount)
+        )
+      ),
+      Some(rowTight(" uptime:    ".style(Style.Dim), formatDuration(uptimeSec)))
+    ).flatten
+    val current = box()(layout(rows*)).border(Border.Round)
+    reader.printAbove(current.render + "\n")
 
   private def printHeader(): Unit =
     val header = box()(
@@ -225,7 +285,8 @@ class CliPort(
         " >_ Capybara".style(Style.Bold),
         "",
         rowTight(" model:     ".style(Style.Dim), agentConfig.model),
-        rowTight(" directory: ".style(Style.Dim), workDirFile.getPath)
+        rowTight(" session:   ".style(Style.Dim), sessionId.toString),
+        rowTight(" directory: ".style(Style.Dim), tildify(workDirFile.getPath))
       )
     ).border(Border.Round)
     reader.printAbove(header.render + "\n")

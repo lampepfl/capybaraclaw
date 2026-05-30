@@ -29,6 +29,12 @@ trait ContextProvider:
       handle: SessionHandle
   ): SessionId
 
+  /** UUID lookup without workdir constraint. Does not touch `last_activity`. */
+  def findSession(id: SessionId): Option[SessionMetadata]
+
+  /** All sessions, ordered by `last_activity` descending (newest first). */
+  def listSessions(): List[SessionMetadata]
+
   /** Load prior conversation for this session. Empty list for never-seen sessions. */
   def load(sessionId: SessionId): List[Message]
 

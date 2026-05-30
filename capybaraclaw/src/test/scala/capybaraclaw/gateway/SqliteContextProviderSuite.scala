@@ -264,6 +264,46 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           List(List("sqlite can search capybara transcripts"))
         )
 
+  test("findSession returns None for an unknown UUID"):
+    withProvider(): (provider, _) =>
+      assertEquals(provider.findSession(SessionId.random()), None)
+
+  test("findSession returns metadata without touching last_activity"):
+    withProvider(sequentialClock()): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+      val before = withConnection(dbPath): conn =>
+        queryRowsPrepared(
+          conn,
+          "SELECT last_activity FROM sessions WHERE id = ?",
+          List(sessionId)
+        ).head.head.toLong
+
+      val found = provider.findSession(sessionId)
+      assertEquals(found.map(_.workdir), Some(WD))
+      assertEquals(found.map(_.id), Some(sessionId))
+
+      val after = withConnection(dbPath): conn =>
+        queryRowsPrepared(
+          conn,
+          "SELECT last_activity FROM sessions WHERE id = ?",
+          List(sessionId)
+        ).head.head.toLong
+      assertEquals(after, before, "findSession must not touch last_activity")
+
+  test("listSessions is empty for a fresh DB"):
+    withProvider(): (provider, _) =>
+      assertEquals(provider.listSessions(), List.empty)
+
+  test("listSessions orders by last_activity DESC"):
+    withProvider(sequentialClock()): (provider, _) =>
+      val a = provider.createSession(WD)
+      val b = provider.createSession(WD)
+      val c = provider.createSession(WD)
+
+      provider.verifyAndTouchSession(b, WD)
+
+      assertEquals(provider.listSessions().map(_.id), List(b, c, a))
+
   test("operations after close fail fast instead of hanging"):
     val dir = Files.createTempDirectory("claw-after-close")
     val provider = SqliteContextProvider(dir)

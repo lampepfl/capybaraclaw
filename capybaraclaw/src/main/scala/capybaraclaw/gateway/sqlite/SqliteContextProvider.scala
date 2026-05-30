@@ -90,6 +90,14 @@ class SqliteContextProvider(
                   sessionId
                 case None => throw e
 
+  def findSession(id: SessionId): Option[SessionMetadata] =
+    readers.withReader: reader =>
+      selectSession(reader, id)
+
+  def listSessions(): List[SessionMetadata] =
+    readers.withReader: reader =>
+      selectAllSessions(reader)
+
   def load(sessionId: SessionId): List[Message] =
     readers.withReader: reader =>
       selectMessages(reader, sessionId)
@@ -240,22 +248,35 @@ class SqliteContextProvider(
       sessionId: SessionId
   ): Option[SessionMetadata] =
     val sql =
-      """SELECT id, workdir, last_activity
+      """SELECT id, workdir, created_at, last_activity
         |FROM sessions
         |WHERE id = ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
       stmt.setString(1, sessionId)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then
-          val rawId = rs.getString("id")
-          Some(
-            SessionMetadata(
-              parseSessionId(rawId, s"sessions.id (looked up by '$rawId')"),
-              rs.getString("workdir"),
-              Instant.ofEpochMilli(rs.getLong("last_activity"))
-            )
-          )
-        else None
+        if rs.next() then Some(sessionMetadataFromRow(rs)) else None
+
+  private def selectAllSessions(conn: Connection): List[SessionMetadata] =
+    val sql =
+      """SELECT id, workdir, created_at, last_activity
+        |FROM sessions
+        |ORDER BY last_activity DESC""".stripMargin
+    SqliteJdbc.withStatement(conn, sql): stmt =>
+      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+        Iterator
+          .continually(rs.next())
+          .takeWhile(identity)
+          .map(_ => sessionMetadataFromRow(rs))
+          .toList
+
+  private def sessionMetadataFromRow(rs: java.sql.ResultSet): SessionMetadata =
+    val rawId = rs.getString("id")
+    SessionMetadata(
+      parseSessionId(rawId, s"sessions.id (looked up by '$rawId')"),
+      rs.getString("workdir"),
+      Instant.ofEpochMilli(rs.getLong("created_at")),
+      Instant.ofEpochMilli(rs.getLong("last_activity"))
+    )
 
   private def parseSessionId(raw: String, context: String): SessionId =
     try SessionId(raw)

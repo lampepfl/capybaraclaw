@@ -51,6 +51,8 @@ object CliTransitions:
     case object StartSpinnerFiber extends CliEffect
     case object CancelSpinnerFiber extends CliEffect
     final case class SendOutbound(msg: GatewayMessage) extends CliEffect
+    case object RenderSessionsList extends CliEffect
+    case object RenderCurrentInfo extends CliEffect
 
   final case class TransitionContext(
       now: Long,
@@ -132,6 +134,15 @@ object CliTransitions:
     if trimmed.isEmpty then TransitionResult(state, Nil)
     else if CliCommands.isQuit(trimmed) then
       TransitionResult(state.copy(running = false), Nil)
+    else if CliCommands.isSessions(trimmed) then
+      TransitionResult(state, List(RenderSessionsList))
+    else if CliCommands.isCurrent(trimmed) then
+      TransitionResult(state, List(RenderCurrentInfo))
+    else if CliCommands.isSlashCommand(trimmed) then
+      TransitionResult(
+        state,
+        List(Render(Role.Error, s"Unknown command: $trimmed"))
+      )
     else if state.turnInFlight then
       TransitionResult(
         state,
