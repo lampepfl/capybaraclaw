@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "safemode.capabilities",
+  "name": "Safemode Capabilities",
+  "version": "0.1.0",
+  "apiMode": "replace-core",
+  "domain": "Capability-based IO",
+  "description": "Foundation plugin: Classified[T] containment, FileSystem[P <: Permission] with path-dependent entries, IOCapability and Network capabilities, capability brokers (requestFileSystem/Network/ExecPermission), confidential columns and tables, and a Laplace-based PrivacyBudget for differential-privacy aggregates."
+}

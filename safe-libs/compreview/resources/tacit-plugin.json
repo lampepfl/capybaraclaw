@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "safemode.compreview",
+  "name": "Safemode Compensation Review",
+  "version": "0.1.0",
+  "apiMode": "replace-core",
+  "domain": "Compensation Review",
+  "description": "Domain plugin for HR compensation analysis. Loads an xlsx payroll table and exposes salary / comp-ratio / outlier / band-violation analytics with Classified containment for sensitive values and public aggregates (headcount, tenure buckets) for safe ones.",
+  "requires": ["safemode.capabilities"]
+}

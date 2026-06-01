@@ -21,16 +21,14 @@ private[agent] object SystemPrompt:
       Some(
         renderResource(
           "prompts/system.md",
-          Map(
-            "work_dir" -> config.workDir,
-            "interface_source" -> loadInterfaceSource()
-          )
+          Map("work_dir" -> config.workDir)
         )
       ),
       Option.when(config.classifiedPaths.nonEmpty):
         renderResource(
           "prompts/classified-paths.md",
           Map(
+            "output_hint" -> classifiedOutputHint(config),
             "paths" -> config.classifiedPaths.map(p => s"- $p").mkString("\n")
           )
         )
@@ -87,9 +85,15 @@ private[agent] object SystemPrompt:
     loadResource(path).getOrElse:
       throw IllegalStateException(s"Missing system prompt template: $path")
 
-  private def loadInterfaceSource(): String =
-    loadResource("Interface.scala")
-      .getOrElse("(Interface.scala not found on classpath)")
+  /** The classified-output instruction depends on whether plugins are loaded:
+    * a plugin (replace-core) exposes its own write function, surfaced by
+    * `show_interface`; the bare core uses `writeClassified`.
+    */
+  private def classifiedOutputHint(config: AgentConfig): String =
+    if config.pluginsConfigured then
+      "Use the plugin's documented classified output function, e.g. " +
+        "`writePrivateAnswer`, exactly as shown by `show_interface`."
+    else "Use `writeClassified` exactly as shown by `show_interface`."
 
   private def loadClawMd(workDir: String): Option[String] =
     val file = File(workDir, "CLAW.md")

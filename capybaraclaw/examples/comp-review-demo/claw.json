@@ -1,0 +1,6 @@
+{
+  "provider": "openrouter",
+  "model": "openai/gpt-4o",
+  "private_llm_config": "claw.private.json",
+  "classified_paths": ["payroll.xlsx"]
+}

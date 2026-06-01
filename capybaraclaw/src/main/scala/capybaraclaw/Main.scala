@@ -222,6 +222,28 @@ private def canonicalFile(path: String): Either[String, File] =
         s"[claw] failed to resolve workdir '$path': ${Throwables.errorMessage(e)}"
       )
 
+/** Banner-facing summary of what TACIT will load from `${workDir}/plugins/`.
+  *  Mirrors `PluginLoader.loadAll(Nil, List(pluginsDir))` so the user sees the
+  *  same outcome (and the same error message) the ClawAgent constructor would
+  *  surface — just earlier and inline with the rest of the banner.
+  */
+private def pluginsBannerLine(workDir: String): String =
+  import tacit.core.{ApiMode, PluginLoader}
+  val dir = File(workDir, "plugins")
+  if !dir.isDirectory then s"(no plugins/ folder in $workDir)"
+  else
+    PluginLoader.loadAll(jars = Nil, scanDirs = List(dir.getAbsolutePath)) match
+      case Left(err)      => s"(error: $err)"
+      case Right(Nil)     => s"(none in ${dir.getAbsolutePath})"
+      case Right(plugins) =>
+        plugins
+          .map: p =>
+            val mode = p.manifest.apiMode match
+              case ApiMode.ExtendCore  => "extend-core"
+              case ApiMode.ReplaceCore => "replace-core"
+            s"${p.manifest.name} ${p.manifest.version} ($mode)"
+          .mkString(", ")
+
 private def printStartupInfo(
     workDir: String,
     enableSlack: Boolean
@@ -230,9 +252,20 @@ private def printStartupInfo(
   val clawMdExists = File(workDir, "CLAW.md").exists()
   val logFile =
     File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
+  val cfg = capybaraclaw.agent.AgentConfig.load(workDir)
   println("Capybara Claw Gateway")
+  println(s"  workdir  : $workDir")
+  println(s"  provider : ${cfg.provider}")
+  println(s"  model    : ${cfg.model}")
+  println(s"  thinking : ${cfg.thinking.getOrElse("off")}")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
+  if cfg.classifiedPaths.nonEmpty then
+    println(s"  classify : ${cfg.classifiedPaths.mkString(", ")}")
+  // Mirror what ClawAgent will load: same scan dir, same PluginLoader call.
+  // We do this in Main (not via ClawAgent.printStartupInfo) because the
+  // gateway creates agents lazily per workdir and never invokes that method.
+  println(s"  plugins  : ${pluginsBannerLine(workDir)}")
   println(s"  logs     : $logFile")
   println(s"  slack    : ${
       if enableSlack then "enabled"

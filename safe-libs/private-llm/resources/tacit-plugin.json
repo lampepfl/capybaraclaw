@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "safemode.private-llm",
+  "name": "Safemode Private LLM",
+  "version": "0.1.0",
+  "apiMode": "replace-core",
+  "domain": "Confidential reasoning",
+  "description": "Bridge to a private LLM endpoint plus confidential reasoning primitives. Provides chat (public + classified overloads), writePrivateAnswer for the double-LLM bridge, plus summarize, redact, categorize, and extractField — all operate inside Classified containment. Endpoint is read from system properties safemode.private.{provider,baseUrl,model}.",
+  "requires": ["safemode.capabilities"]
+}

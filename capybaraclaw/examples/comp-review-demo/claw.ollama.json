@@ -1,0 +1,7 @@
+{
+  "provider": "ollama",
+  "base_url": "http://localhost:11435",
+  "model": "qwen3.5:latest",
+  "private_llm_config": "claw.private.json",
+  "classified_paths": ["payroll.xlsx"]
+}

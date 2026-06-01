@@ -1,0 +1,5 @@
+{
+  "provider": "ollama",
+  "base_url": "http://localhost:11434",
+  "model": "gemma4:e4b"
+}
