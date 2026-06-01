@@ -3,6 +3,8 @@ package capybaraclaw.agent
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
+import tacit.agents.llm.endpoint.{EffortLevel, ThinkingMode}
+
 class AgentConfigSuite extends munit.FunSuite:
   private val workDir = FunFixture[Path](
     setup = _ => Files.createTempDirectory("claw-config"),
@@ -27,6 +29,7 @@ class AgentConfigSuite extends munit.FunSuite:
     assertEquals(c.model, "minimax/minimax-m2.7")
     assertEquals(c.maxTokens, 16000)
     assertEquals(c.classifiedPaths, Nil)
+    assertEquals(c.thinking, Some(ThinkingMode.Effort(EffortLevel.Medium)))
 
   workDir.test("valid claw.json is parsed"): dir =>
     writeConfig(
