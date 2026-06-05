@@ -4,8 +4,12 @@ val scala3Version = {
     val url = "https://repo.scala-lang.org/artifactory/api/storage/local-maven-nightlies/org/scala-lang/scala3-compiler_3/"
     val content = scala.io.Source.fromURL(url, "UTF-8").mkString
     val pattern = """"uri"\s*:\s*"/(3\.[^"]*NIGHTLY)"""".r
-    val versions = pattern.findAllMatchIn(content).map(_.group(1)).toList.sorted
-    val latest = versions.last
+    val versions = pattern.findAllMatchIn(content).map(_.group(1)).toList
+    val versionKey = """3\.(\d+)\.(\d+).*-bin-(\d+)""".r
+    val latest = versions.maxBy {
+      case versionKey(minor, patch, date) => (minor.toInt, patch.toInt, date.toInt)
+      case _ => (0, 0, 0)
+    }
     if (latest != fallback) println(s"[info] Use Scala 3 nightly: $latest")
     latest
   } catch { case _: Exception =>
