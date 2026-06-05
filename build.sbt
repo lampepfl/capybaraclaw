@@ -1,5 +1,5 @@
 val scala3Version = {
-  val fallback = "3.8.3-RC1"
+  val fallback = "3.8.4"
   try {
     val url = "https://repo.scala-lang.org/artifactory/api/storage/local-maven-nightlies/org/scala-lang/scala3-compiler_3/"
     val content = scala.io.Source.fromURL(url, "UTF-8").mkString
@@ -19,7 +19,7 @@ val scala3Version = {
 }
 ThisBuild / resolvers += Resolver.scalaNightlyRepository
 
-val stableScala3Version = "3.8.2"
+val stableScala3Version = "3.8.4"
 
 val tacitVersion = "0.2.0-SNAPSHOT"
 val tacitLibraryVersion = "0.2.0-SNAPSHOT"
