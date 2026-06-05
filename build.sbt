@@ -1,11 +1,15 @@
 val scala3Version = {
-  val fallback = "3.8.3-RC1"
+  val fallback = "3.8.4"
   try {
     val url = "https://repo.scala-lang.org/artifactory/api/storage/local-maven-nightlies/org/scala-lang/scala3-compiler_3/"
     val content = scala.io.Source.fromURL(url, "UTF-8").mkString
     val pattern = """"uri"\s*:\s*"/(3\.[^"]*NIGHTLY)"""".r
-    val versions = pattern.findAllMatchIn(content).map(_.group(1)).toList.sorted
-    val latest = versions.last
+    val versions = pattern.findAllMatchIn(content).map(_.group(1)).toList
+    val versionKey = """3\.(\d+)\.(\d+).*-bin-(\d+)""".r
+    val latest = versions.maxBy {
+      case versionKey(minor, patch, date) => (minor.toInt, patch.toInt, date.toInt)
+      case _ => (0, 0, 0)
+    }
     if (latest != fallback) println(s"[info] Use Scala 3 nightly: $latest")
     latest
   } catch { case _: Exception =>
@@ -15,10 +19,10 @@ val scala3Version = {
 }
 ThisBuild / resolvers += Resolver.scalaNightlyRepository
 
-val stableScala3Version = "3.8.2"
+val stableScala3Version = "3.8.4"
 
-val tacitVersion = "0.1.4-SNAPSHOT"
-val tacitLibraryVersion = "0.1.4-SNAPSHOT"
+val tacitVersion = "0.2.0-SNAPSHOT"
+val tacitLibraryVersion = "0.2.0-SNAPSHOT"
 
 lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
   val quotedArgs = args.map { arg =>
