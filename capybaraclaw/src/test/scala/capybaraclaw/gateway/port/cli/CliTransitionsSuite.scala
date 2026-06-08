@@ -160,6 +160,20 @@ class CliTransitionsSuite extends FunSuite:
     )
     assertEquals(transition(stopped, ErrorText("x"), ctx).effects, Nil)
 
+  /** ToolCall */
+
+  test("ToolCall while running: renders name(args)"):
+    val r = transition(midTurn, ToolCall("eval_scala", "{\"code\":\"1\"}"), ctx)
+    assertEquals(r.state, midTurn)
+    assertEquals(
+      r.effects,
+      List(Render(Role.Tool, "eval_scala({\"code\":\"1\"})"))
+    )
+
+  test("ToolCall after running=false: no effects"):
+    val stopped = idle.copy(running = false)
+    assertEquals(transition(stopped, ToolCall("t", "{}"), ctx).effects, Nil)
+
   /** TurnFinished */
 
   test(
