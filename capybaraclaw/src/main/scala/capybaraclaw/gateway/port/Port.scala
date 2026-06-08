@@ -27,6 +27,14 @@ trait Port extends AutoCloseable:
     */
   def send(sessionId: SessionId, origin: Origin, text: String): Unit
 
+  /** Notify the port that a tool call finished, with its name and arguments. */
+  def sendToolCall(
+      sessionId: SessionId,
+      origin: Origin,
+      toolName: String,
+      args: String
+  ): Unit = ()
+
   /** Deliver an error for a turn (e.g. LLM timeout, tool failure). */
   def sendError(
       sessionId: SessionId,
