@@ -20,7 +20,9 @@ object MemoryTool:
       "Use target='user' for preferences and communication style; target='memory' " +
       "for environment facts, project conventions, tool quirks, and lessons learned. " +
       "Use action='add' with content for a new entry; action='replace' with old_text " +
-      "and content to replace an entry; action='remove' with old_text to delete an entry. " +
+      "and content to replace an entry; action='remove' with old_text to delete an entry; " +
+      "action='read' to view the current contents and any backups; action='reconcile' with " +
+      "content to repair a drifted file. " +
       "old_text is a short unique substring identifying a complete entry. " +
       "If a write is refused for drift, use action='read' to view the current contents " +
       "and any backups, then action='reconcile' with content set to the full corrected, " +

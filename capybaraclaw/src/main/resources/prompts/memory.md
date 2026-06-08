@@ -5,8 +5,8 @@ session only appear here in your next session:
 - MEMORY.md - your own notes (environment, project conventions, tool quirks, lessons).
 - USER.md - the user's profile (preferences, communication style, expectations).
 
-Edit them with the `memory` tool (add / replace / remove); see the tool description for its
-exact arguments.
+Edit them with the `memory` tool (add / replace / remove, plus read / reconcile to inspect
+and repair a drifted file); see the tool description for its exact arguments.
 
 Entries are separated by a line containing only `§`.
 
