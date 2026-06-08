@@ -41,7 +41,12 @@ object AgentConfig:
   ): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
     if !file.exists() then
-      AgentConfig(workDir = workDir, memorySnapshot = memorySnapshot)
+      AgentConfig(
+        workDir = workDir,
+        provider = DefaultProvider,
+        thinking = deriveThinking(DefaultProvider),
+        memorySnapshot = memorySnapshot
+      )
     else
       val raw = readAll(Source.fromFile(file))
       val obj =
