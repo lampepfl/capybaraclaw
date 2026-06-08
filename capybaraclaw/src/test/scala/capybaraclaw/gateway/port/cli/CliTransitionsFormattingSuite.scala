@@ -133,3 +133,28 @@ class CliTransitionsFormattingSuite extends FunSuite:
 
   test("prepareEntryLines: preserves a single non-empty line"):
     assertEquals(CliTransitions.prepareEntryLines("solo"), List("solo"))
+
+  /** compactArgs / formatToolCall */
+
+  test("compactArgs: collapses whitespace and newlines to single spaces"):
+    assertEquals(
+      CliTransitions.compactArgs("{\n  \"a\": 1,\n  \"b\": 2\n}"),
+      "{ \"a\": 1, \"b\": 2 }"
+    )
+
+  test("compactArgs: truncates overly long args with an ellipsis"):
+    val long = "x" * 200
+    val out = CliTransitions.compactArgs(long)
+    assertEquals(out.length, CliTransitions.ToolArgsMaxLen)
+    assert(out.endsWith("…"))
+
+  test("formatToolCall: renders a single name(args) line"):
+    assertEquals(
+      CliTransitions.formatToolCall("mem", "{\"q\":1}"),
+      "mem({\"q\":1})"
+    )
+
+  test("formatToolCall: truncates long args with an ellipsis"):
+    val out = CliTransitions.formatToolCall("t", "y" * 500)
+    assert(out.startsWith("t("))
+    assert(out.endsWith("…)"))
