@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory
 import scala.annotation.tailrec
 import scala.util.control.NonFatal
 import tacit.agents.llm.agentic.{AgentError, AgentRun, AgentStreamEvent}
-import tacit.agents.llm.endpoint.{Message, StreamEvent}
+import tacit.agents.llm.endpoint.{Content, Message, StreamEvent}
 
 private[gateway] final case class RoutedGatewayMessage(
     message: GatewayMessage,
@@ -55,7 +55,7 @@ class AgentRunner(
         val msg = routed.message
         val replyPort = routed.replyPort
         val replyStream = replyPort.openReply(sessionId, msg.origin)
-        try processTurn(msg, replyStream)
+        try processTurn(msg, replyPort, replyStream)
         catch
           case NonFatal(e) =>
             logger.error(s"[runner $sessionId] turn failed", e)
@@ -73,9 +73,11 @@ class AgentRunner(
       case Left(_) =>
         ()
 
-  private def processTurn(msg: GatewayMessage, replyStream: ReplyStream)(using
-      Async.Spawn
-  ): Unit =
+  private def processTurn(
+      msg: GatewayMessage,
+      replyPort: Port,
+      replyStream: ReplyStream
+  )(using Async.Spawn): Unit =
     val tagged = tag(msg)
     contextProvider.append(sessionId, Message.user(tagged))
 
@@ -86,29 +88,43 @@ class AgentRunner(
     import StreamEvent.*
 
     @tailrec
-    def consume(finalText: String, aborted: Boolean): TurnResult =
+    def consume(
+        finalText: String,
+        toolInputs: Map[String, String],
+        aborted: Boolean
+    ): TurnResult =
       readEvent(run) match
         case Emitted(Stream(Delta(text))) =>
           replyStream.delta(text)
           drainSteers(run)
-          consume(finalText, aborted)
+          consume(finalText, toolInputs, aborted)
         case Emitted(Stream(Done(response))) =>
+          val nextToolInputs = toolInputs ++ response.message.content.collect:
+            case Content.ToolUse(id, _, input) => id -> input
           drainSteers(run)
-          consume(response.message.text, aborted)
+          consume(response.message.text, nextToolInputs, aborted)
+        case Emitted(ToolResult(id, toolName, _)) =>
+          val args = toolInputs.getOrElse(id, "")
+          try replyPort.sendToolCall(sessionId, msg.origin, toolName, args)
+          catch
+            case NonFatal(e) =>
+              logger.error(s"[runner $sessionId] sendToolCall failed", e)
+          drainSteers(run)
+          consume(finalText, toolInputs, aborted)
         case Emitted(_) =>
           drainSteers(run)
-          consume(finalText, aborted)
+          consume(finalText, toolInputs, aborted)
         case Failed(error) =>
           if !aborted then
             logger.error(
               s"[runner $sessionId] agent run failed: ${error.description}"
             )
             replyStream.abort(error.description)
-          consume(finalText, aborted = true)
+          consume(finalText, toolInputs, aborted = true)
         case Closed =>
           TurnResult(finalText, aborted)
 
-    val result = consume("", aborted = false)
+    val result = consume("", Map.empty, aborted = false)
     if !result.aborted && result.finalText.nonEmpty then
       contextProvider.append(sessionId, Message.assistant(result.finalText))
       replyStream.complete(result.finalText)

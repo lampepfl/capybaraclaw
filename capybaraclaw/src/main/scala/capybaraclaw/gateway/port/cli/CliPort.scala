@@ -114,6 +114,14 @@ class CliPort(
       def abort(reason: String): Unit =
         offerEvent(ErrorText(reason))
 
+  override def sendToolCall(
+      sessionId: SessionId,
+      origin: Origin,
+      toolName: String,
+      args: String
+  ): Unit =
+    offerEvent(ToolCall(toolName, args))
+
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
@@ -355,6 +363,11 @@ class CliPort(
         )
       case Role.Error =>
         ("✗ error", AttributedStyle.DEFAULT.foreground(AttributedStyle.RED))
+      case Role.Tool =>
+        (
+          "⚙ tool",
+          AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW)
+        )
 
     val lines = prepareEntryLines(text)
     val builder = AttributedStringBuilder()
