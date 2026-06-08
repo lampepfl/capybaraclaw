@@ -28,6 +28,8 @@ case class AgentConfig(
     )
 
 object AgentConfig:
+  private val DefaultProvider = "openrouter"
+
   /** Load `${workDir}/claw.json` if present; otherwise use defaults. The
     * `thinking` mode is derived from the provider. A malformed file or a
     * wrong-typed field raises [[ConfigError]] with a message naming the file
@@ -39,7 +41,12 @@ object AgentConfig:
   ): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
     if !file.exists() then
-      AgentConfig(workDir = workDir, memorySnapshot = memorySnapshot)
+      AgentConfig(
+        workDir = workDir,
+        provider = DefaultProvider,
+        thinking = deriveThinking(DefaultProvider),
+        memorySnapshot = memorySnapshot
+      )
     else
       val raw = readAll(Source.fromFile(file))
       val obj =
@@ -50,7 +57,7 @@ object AgentConfig:
               s"claw.json is not a valid JSON object: ${e.getMessage}"
             )
       val provider =
-        field(obj, "provider", "a string")(_.str).getOrElse("openrouter")
+        field(obj, "provider", "a string")(_.str).getOrElse(DefaultProvider)
       AgentConfig(
         workDir = workDir,
         provider = provider,
