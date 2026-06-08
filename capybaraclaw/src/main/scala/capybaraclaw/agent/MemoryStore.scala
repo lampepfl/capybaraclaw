@@ -76,11 +76,8 @@ final class MemoryStore(val baseDir: File):
     else
       mutate(f): current =>
         if current.contains(entry) then
-          Right(
-            (
-              current,
-              success(f, current, "Entry already exists (no duplicate added).")
-            )
+          Left(
+            success(f, current, "Entry already exists (no duplicate added).")
           )
         else
           val updated = current :+ entry
