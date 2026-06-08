@@ -40,31 +40,32 @@ object AgentConfig:
       memorySnapshot: MemorySnapshot = MemorySnapshot.empty
   ): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
-    val obj =
-      if !file.exists() then ujson.Obj().value
-      else
-        val raw = readAll(Source.fromFile(file))
+    if !file.exists() then
+      AgentConfig(workDir = workDir, memorySnapshot = memorySnapshot)
+    else
+      val raw = readAll(Source.fromFile(file))
+      val obj =
         try ujson.read(raw).obj
         catch
           case NonFatal(e) =>
             throw ConfigError(
               s"claw.json is not a valid JSON object: ${e.getMessage}"
             )
-    val provider =
-      field(obj, "provider", "a string")(_.str).getOrElse(DefaultProvider)
-    AgentConfig(
-      workDir = workDir,
-      provider = provider,
-      model = field(obj, "model", "a string")(_.str)
-        .getOrElse("minimax/minimax-m2.7"),
-      maxTokens =
-        field(obj, "max_tokens", "a number")(_.num.toInt).getOrElse(16000),
-      thinking = deriveThinking(provider),
-      classifiedPaths = field(obj, "classified_paths", "an array of strings")(
-        _.arr.map(_.str).toList
-      ).getOrElse(Nil),
-      memorySnapshot = memorySnapshot
-    )
+      val provider =
+        field(obj, "provider", "a string")(_.str).getOrElse(DefaultProvider)
+      AgentConfig(
+        workDir = workDir,
+        provider = provider,
+        model = field(obj, "model", "a string")(_.str)
+          .getOrElse("minimax/minimax-m2.7"),
+        maxTokens =
+          field(obj, "max_tokens", "a number")(_.num.toInt).getOrElse(16000),
+        thinking = deriveThinking(provider),
+        classifiedPaths = field(obj, "classified_paths", "an array of strings")(
+          _.arr.map(_.str).toList
+        ).getOrElse(Nil),
+        memorySnapshot = memorySnapshot
+      )
 
   /** Read an optional field through `extract`, turning any type mismatch into a
     * [[ConfigError]] that names the field and the expected shape. Returns None
