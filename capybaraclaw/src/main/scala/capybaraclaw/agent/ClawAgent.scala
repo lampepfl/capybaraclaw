@@ -5,15 +5,17 @@ import tacit.agents.llm.agentic.{Agent, AgentRun, AgentState, AgentError}
 import gears.async.Async
 import tacit.agents.utils.Result
 
-import capybaraclaw.agent.tools.EvalScalaTool
+import capybaraclaw.agent.tools.{EvalScalaTool, MemoryTool}
 
 /** Agent class for Claw. */
 class ClawAgent(
     val workDir: String,
     initialMessages: List[Message] = Nil,
-    endpointOverride: Option[Endpoint] = None
+    endpointOverride: Option[Endpoint] = None,
+    memoryStore: MemoryStore = MemoryStore.default()
 ):
-  val agentConfig: AgentConfig = AgentConfig.load(workDir)
+  val agentConfig: AgentConfig =
+    AgentConfig.load(workDir, memoryStore.snapshot())
 
   private val replEnv: ReplEnvironment =
     ReplEnvironment(workDir, agentConfig.classifiedPaths)
@@ -32,6 +34,7 @@ class ClawAgent(
         val llmConfig = agentConfig.toLLMConfig
 
     EvalScalaTool.register(a, replEnv.repl)
+    MemoryTool.register(a, memoryStore)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue
     // where they left off.
