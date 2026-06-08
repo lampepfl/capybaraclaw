@@ -62,11 +62,11 @@ object MemoryTool:
           .toRight(s"Invalid target '${args.target}'. Use 'memory' or 'user'.")
         result <- args.action match
           case "add" =>
-            required(args.content, "Content").map(store.add(target, _))
+            required(args.content, "content").map(store.add(target, _))
           case "replace" =>
             for
               old <- required(args.old_text, "old_text")
-              content <- required(args.content, "Content")
+              content <- required(args.content, "content")
             yield store.replace(target, old, content)
           case "remove" =>
             required(args.old_text, "old_text").map(store.remove(target, _))
