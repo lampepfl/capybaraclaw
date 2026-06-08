@@ -23,7 +23,6 @@ private[agent] object SystemPrompt:
           "prompts/system.md",
           Map(
             "work_dir" -> config.workDir,
-            "config" -> config.toString,
             "interface_source" -> loadInterfaceSource()
           )
         )
@@ -40,10 +39,28 @@ private[agent] object SystemPrompt:
         renderResource(
           "prompts/project-instructions.md",
           Map("instructions" -> md)
-        )
+        ),
+      Some(renderMemory(config.memorySnapshot))
     ).flatten
 
     sections.mkString("\n\n")
+
+  private def renderMemory(snap: MemorySnapshot): String =
+    renderResource(
+      "prompts/memory.md",
+      Map(
+        "memory_usage" -> snap.memoryPct.toString,
+        "memory_chars" -> snap.memoryChars.toString,
+        "memory_capacity" -> MemoryFile.Memory.capacity.toString,
+        "memory_content" ->
+          Option.when(snap.memory.nonEmpty)(snap.memory).getOrElse("(empty)"),
+        "user_usage" -> snap.userPct.toString,
+        "user_chars" -> snap.userChars.toString,
+        "user_capacity" -> MemoryFile.User.capacity.toString,
+        "user_content" ->
+          Option.when(snap.user.nonEmpty)(snap.user).getOrElse("(empty)")
+      )
+    )
 
   private[agent] def renderResource(
       path: String,

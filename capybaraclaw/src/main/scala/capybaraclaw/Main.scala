@@ -2,6 +2,7 @@ package capybaraclaw
 
 import caseapp.*
 
+import capybaraclaw.agent.{ClawAgent, MemoryStore}
 import capybaraclaw.gateway.{Gateway, SessionId, SessionMetadata}
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.{CliPort, SessionFormatting}
@@ -79,6 +80,7 @@ private object ClawMain extends CaseApp[CliOptions]:
         val (sessionId, workDirFile) =
           bootstrapSession(contextProvider, options, remainingArgs)
         val workDir = workDirFile.getPath
+        val memoryStore = MemoryStore.default()
 
         Async.blocking:
           val slackPort: Option[SlackPort] =
@@ -91,11 +93,18 @@ private object ClawMain extends CaseApp[CliOptions]:
             CliPort(
               workDirFile = workDirFile,
               sessionId = sessionId,
-              contextProvider = contextProvider
+              contextProvider = contextProvider,
+              memoryStore = memoryStore
             )
           )
           val ports: List[Port] = slackPort.toList :+ cli
-          val gateway = Gateway(workDir, ports, contextProvider)
+          val gateway = Gateway(
+            workDir,
+            ports,
+            contextProvider,
+            clawFactory = (wd, hist) =>
+              ClawAgent(wd, initialMessages = hist, memoryStore = memoryStore)
+          )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())
           val cliFuture = cli.start()
