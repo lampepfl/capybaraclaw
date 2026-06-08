@@ -11,6 +11,7 @@ object CliTransitions:
   final case class UserInput(raw: String) extends CliEvent
   final case class AssistantText(text: String) extends CliEvent
   final case class ErrorText(text: String) extends CliEvent
+  final case class ToolCall(toolName: String, args: String) extends CliEvent
   final case class SpinnerTick(nowMillis: Long) extends CliEvent
   final case class HintTick(buffer: String) extends CliEvent
   final case class InputReadFailed(error: Throwable) extends CliEvent
@@ -41,7 +42,7 @@ object CliTransitions:
       )
 
   enum Role:
-    case User, Assistant, Error
+    case User, Assistant, Error, Tool
 
   sealed trait CliEffect
   object CliEffect:
@@ -87,6 +88,14 @@ object CliTransitions:
       case ErrorText(text) =>
         if state.running then
           TransitionResult(state, List(Render(Role.Error, text)))
+        else TransitionResult(state, Nil)
+
+      case ToolCall(toolName, args) =>
+        if state.running then
+          TransitionResult(
+            state,
+            List(Render(Role.Tool, formatToolCall(toolName, args)))
+          )
         else TransitionResult(state, Nil)
 
       case TurnFinished =>
@@ -223,3 +232,17 @@ object CliTransitions:
   def prepareEntryLines(text: String): List[String] =
     val nonEmpty = text.linesIterator.filter(_.nonEmpty).toList
     if nonEmpty.isEmpty then List("") else nonEmpty
+
+  val ToolArgsMaxLen: Int = 80
+
+  def formatToolCall(toolName: String, args: String): String =
+    s"$toolName(${compactArgs(args)})"
+
+  def compactArgs(args: String): String =
+    truncate(compactWhitespace(args), ToolArgsMaxLen)
+
+  private def compactWhitespace(text: String): String =
+    text.trim.replaceAll("\\s+", " ")
+
+  private def truncate(text: String, maxLen: Int): String =
+    if text.length <= maxLen then text else s"${text.take(maxLen - 1)}…"
