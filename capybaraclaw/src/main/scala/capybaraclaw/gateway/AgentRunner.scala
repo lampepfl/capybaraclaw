@@ -6,7 +6,7 @@ import gears.async.{Async, Future, UnboundedChannel}
 import org.slf4j.LoggerFactory
 import scala.util.control.NonFatal
 import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
-import tacit.agents.llm.endpoint.{Message, StreamEvent}
+import tacit.agents.llm.endpoint.{Content, Message, StreamEvent}
 
 private[gateway] final case class RoutedGatewayMessage(
     message: GatewayMessage,
@@ -48,7 +48,7 @@ class AgentRunner(
           val msg = routed.message
           val replyPort = routed.replyPort
           val replyStream = replyPort.openReply(sessionId, msg.origin)
-          try processTurn(msg, replyStream)
+          try processTurn(msg, replyPort, replyStream)
           catch
             case NonFatal(e) =>
               logger.error(s"[runner $sessionId] turn failed", e)
@@ -65,7 +65,11 @@ class AgentRunner(
         case Left(_) =>
           running = false
 
-  private def processTurn(msg: GatewayMessage, replyStream: ReplyStream)(using
+  private def processTurn(
+      msg: GatewayMessage,
+      replyPort: Port,
+      replyStream: ReplyStream
+  )(using
       Async.Spawn
   ): Unit =
     val tagged = tag(msg)
@@ -73,6 +77,7 @@ class AgentRunner(
 
     val run: AgentRun = claw.streamAsk(tagged)
     var finalText: String = ""
+    var toolInputs: Map[String, String] = Map.empty
     var reading = true
 
     while reading do
@@ -84,6 +89,15 @@ class AgentRunner(
               Right(AgentStreamEvent.Stream(StreamEvent.Done(response)))
             ) =>
           finalText = response.message.text
+          toolInputs = toolInputs ++ response.message.content.collect:
+            case Content.ToolUse(id, _, input) => id -> input
+          drainSteers(run)
+        case Right(Right(AgentStreamEvent.ToolResult(id, toolName, _))) =>
+          val args = toolInputs.getOrElse(id, "")
+          try replyPort.sendToolCall(sessionId, msg.origin, toolName, args)
+          catch
+            case NonFatal(e) =>
+              logger.error(s"[runner $sessionId] sendToolCall failed", e)
           drainSteers(run)
         case Right(_) =>
           drainSteers(run)
