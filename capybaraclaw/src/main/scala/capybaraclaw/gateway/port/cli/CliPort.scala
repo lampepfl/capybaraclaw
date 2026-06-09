@@ -85,9 +85,10 @@ class CliPort(
   def start()(using Async.Spawn): Future[Unit] =
     Future:
       try
-        printHeader()
         if status.isDefined then
           HintWidgets.install(reader, buf => offerEvent(HintTick(buf)))
+          renderStatus("")
+        printHeader()
         offerInputReadPermit()
         val _ = Future(readInputLoop())
         val finalState =
