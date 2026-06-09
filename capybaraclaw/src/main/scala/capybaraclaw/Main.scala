@@ -96,7 +96,7 @@ private object ClawMain extends CaseApp[CliOptions]:
           )
           val ports: List[Port] = slackPort.toList :+ cli
           val gateway = Gateway(workDir, ports, contextProvider)
-          println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.\n")
+          println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())
           val cliFuture = cli.start()
 

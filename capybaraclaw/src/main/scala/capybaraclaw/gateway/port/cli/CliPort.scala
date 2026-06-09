@@ -87,6 +87,7 @@ class CliPort(
       try
         if status.isDefined then
           HintWidgets.install(reader, buf => offerEvent(HintTick(buf)))
+          println("")
           renderStatus("")
         printHeader()
         offerInputReadPermit()
