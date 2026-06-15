@@ -1,7 +1,7 @@
 package capybaraclaw.gateway
 
 import capybaraclaw.agent.ClawAgent
-import capybaraclaw.gateway.port.Port
+import capybaraclaw.gateway.port.{Port, ReplyStream}
 import capybaraclaw.gateway.port.cli.CliPort
 import capybaraclaw.gateway.port.slack.SlackPort
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
@@ -86,10 +86,17 @@ class FakePort(override val id: PortId) extends Port:
 
   def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
 
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
-    sentReplies.put(
-      FakePort.Reply(sessionId, FakePort.replyHandle(origin), text)
-    )
+  override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
+    new ReplyStream:
+      def delta(text: String): Unit = ()
+      def complete(finalText: String): Unit =
+        sentReplies.put(
+          FakePort.Reply(sessionId, FakePort.replyHandle(origin), finalText)
+        )
+      def abort(reason: String): Unit =
+        sentReplies.put(
+          FakePort.Reply(sessionId, FakePort.replyHandle(origin), reason)
+        )
 
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     finishedTurns.put(sessionId)
@@ -98,7 +105,7 @@ class FakePort(override val id: PortId) extends Port:
     rejectedInbound.put(FakePort.Rejection(origin, text))
     origin.session match
       case SessionRef.Direct(sessionId) =>
-        try sendError(sessionId, origin, text)
+        try openReply(sessionId, origin).abort(text)
         finally onTurnFinished(sessionId, origin)
       case SessionRef.External(_) =>
         ()

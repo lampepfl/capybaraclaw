@@ -10,7 +10,7 @@ import capybaraclaw.gateway.{
   SessionRef,
   UserId
 }
-import capybaraclaw.gateway.port.Port
+import capybaraclaw.gateway.port.{Port, ReplyStream}
 
 import gears.async.AsyncOperations.sleep
 import gears.async.{
@@ -80,6 +80,11 @@ class CliPort(
   private val priorTurnCount: Int =
     contextProvider.load(sessionId).count(_.role == MessageRole.User)
 
+  // Accumulate assistant stream text to print it line by line.
+  // This avoids some issues with jline printing.
+  private var streamFirstLine = true
+  private val streamBuffer = StringBuilder()
+
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
   def start()(using Async.Spawn): Future[Unit] =
@@ -98,15 +103,14 @@ class CliPort(
         printGoodbye(finalState.turnCount)
       finally cleanup()
 
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
-    offerEvent(AssistantText(text))
-
-  override def sendError(
-      sessionId: SessionId,
-      origin: Origin,
-      text: String
-  ): Unit =
-    offerEvent(ErrorText(text))
+  override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
+    new ReplyStream:
+      def delta(text: String): Unit =
+        offerEvent(AssistantTextDelta(text))
+      def complete(finalText: String): Unit =
+        offerEvent(AssistantTextComplete(finalText))
+      def abort(reason: String): Unit =
+        offerEvent(ErrorText(reason))
 
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
@@ -114,7 +118,7 @@ class CliPort(
   override def rejectInbound(origin: Origin, text: String): Unit =
     origin.session match
       case SessionRef.Direct(sessionId) =>
-        try sendError(sessionId, origin, text)
+        try offerEvent(ErrorText(text))
         finally onTurnFinished(sessionId, origin)
       case SessionRef.External(_) =>
         throw IllegalArgumentException("CLI rejects require a direct session")
@@ -194,6 +198,12 @@ class CliPort(
     import CliEffect.*
     effects.foldLeft(rs): (rs, effect) =>
       effect match
+        case RenderAssistantDelta(text) =>
+          renderAssistantDelta(text)
+          rs
+        case RenderAssistantComplete() =>
+          renderAssistantComplete()
+          rs
         case Render(role, text) =>
           renderEntry(role, text)
           rs
@@ -300,6 +310,27 @@ class CliPort(
       )
     ).border(Border.Round)
     reader.printAbove(header.render + "\n")
+
+  private def renderAssistantDelta(text: String): Unit =
+    streamBuffer.append(text)
+    var idx = streamBuffer.indexOf("\n")
+    while idx >= 0 do
+      val line = streamBuffer.substring(0, idx)
+      streamBuffer.delete(0, idx + 1)
+      printAssistant(line)
+      idx = streamBuffer.indexOf("\n")
+
+  private def renderAssistantComplete(): Unit =
+    val line = streamBuffer.toString()
+    streamBuffer.clear()
+    printAssistant(line)
+    streamFirstLine = true
+
+  private def printAssistant(text: String): Unit =
+    if streamFirstLine then
+      renderEntry(Role.Assistant, text)
+      streamFirstLine = false
+    else reader.printAbove(text)
 
   private def renderEntry(role: Role, text: String): Unit =
     val (label, style) = role match

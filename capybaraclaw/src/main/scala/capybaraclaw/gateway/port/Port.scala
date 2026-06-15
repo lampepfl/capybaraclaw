@@ -6,8 +6,8 @@ import gears.async.ReadableChannel
 /** A message source/sink through which the Gateway talks to the outside world.
   *
   * A `Port` aggregates one logical channel of inbound `GatewayMessage`s and a way to
-  * send replies back. The Gateway pumps `incoming` into per-session agent runners and
-  * calls `send` when a runner produces a reply for one of this port's sessions.
+  * deliver replies back. The Gateway pumps `incoming` into per-session agent runners.
+  * Each turn calls `openReply` and streams assistant output through the returned `ReplyStream`.
   */
 trait Port extends AutoCloseable:
   /** Unique identifier for this port, used as `Origin.port` on inbound messages. */
@@ -22,18 +22,11 @@ trait Port extends AutoCloseable:
     */
   def validateOriginForReply(origin: Origin): Unit = ()
 
-  /** Deliver a reply for a session. Called only when a turn for that session
-    * was triggered by a message originating from this port.
+  /** Open a reply sink for an agent turn. Called at the start of each turn for a
+    * message that originated on this port. The runner forwards stream deltas, then
+    * calls `complete` or `abort` before the turn ends.
     */
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit
-
-  /** Deliver an error for a turn (e.g. LLM timeout, tool failure). */
-  def sendError(
-      sessionId: SessionId,
-      origin: Origin,
-      text: String
-  ): Unit =
-    send(sessionId, origin, s"ERROR: $text")
+  def openReply(sessionId: SessionId, origin: Origin): ReplyStream
 
   /** Called after a turn for `sessionId` finishes, regardless of whether it
     * produced a reply. Ports that want to block input until a turn is done can
@@ -55,3 +48,8 @@ trait Port extends AutoCloseable:
 
   /** AutoCloseable bridge so a `Port` can be managed by `scala.util.Using`. */
   override def close(): Unit = shutdown()
+
+trait ReplyStream:
+  def delta(text: String): Unit
+  def complete(finalText: String): Unit
+  def abort(reason: String): Unit

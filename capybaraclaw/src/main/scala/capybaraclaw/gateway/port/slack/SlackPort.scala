@@ -9,7 +9,7 @@ import capybaraclaw.gateway.{
   SessionRef,
   UserId
 }
-import capybaraclaw.gateway.port.Port
+import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import org.slf4j.LoggerFactory
 
@@ -70,11 +70,17 @@ class SlackPort(bot: SlackApi) extends Port:
       case SessionRef.External(_) =>
         ()
 
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit =
-    val handle = getSlackHandle(origin)
-    val (channelId, threadTs) = decodeHandle(handle)
-    logOutgoingMessage(sessionId, handle, text)
-    bot.sendMessage(channelId, text, threadTs)
+  override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
+    new ReplyStream:
+      // TODO: implement proper streaming of slack messages
+      def delta(text: String): Unit = ()
+      def complete(finalText: String): Unit =
+        val handle = getSlackHandle(origin)
+        val (channelId, threadTs) = decodeHandle(handle)
+        logOutgoingMessage(sessionId, handle, finalText)
+        bot.sendMessage(channelId, finalText, threadTs)
+      def abort(reason: String): Unit =
+        complete(s"ERROR: $reason")
 
   def shutdown(): Unit =
     try outCh.close()
