@@ -141,14 +141,14 @@ class CliTransitionsSuite extends FunSuite:
   test("AssistantTextComplete while running: emits RenderAssistantComplete"):
     val r = transition(midTurn, AssistantTextComplete("answer"), ctx)
     assertEquals(r.state, midTurn)
-    assertEquals(r.effects, List(RenderAssistantComplete()))
+    assertEquals(r.effects, List(RenderAssistantComplete))
 
   test("ErrorText while running: flushes stream then emits Render(Error)"):
     val r = transition(midTurn, ErrorText("oops"), ctx)
     assertEquals(r.state, midTurn)
     assertEquals(
       r.effects,
-      List(RenderAssistantComplete(), Render(Role.Error, "oops"))
+      List(RenderAssistantComplete, Render(Role.Error, "oops"))
     )
 
   test("Assistant/Error text after running=false: no effects"):
@@ -171,7 +171,7 @@ class CliTransitionsSuite extends FunSuite:
     assertEquals(r.state.turnCount, midTurn.turnCount) // unchanged
     assertEquals(
       r.effects,
-      List(CancelSpinnerFiber, SetEcho(true), StopSpinner)
+      List(CancelSpinnerFiber, SetEcho(true), StopSpinner, ClearAssistantBuffer)
     )
 
   test(
@@ -180,7 +180,10 @@ class CliTransitionsSuite extends FunSuite:
     val noSpinner = midTurn.copy(spinner = None)
     val r = transition(noSpinner, TurnFinished, ctx)
     assertEquals(r.state.turnInFlight, false)
-    assertEquals(r.effects, List(SetEcho(true), StopSpinner))
+    assertEquals(
+      r.effects,
+      List(SetEcho(true), StopSpinner, ClearAssistantBuffer)
+    )
 
   /** SpinnerTick */
 

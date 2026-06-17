@@ -48,7 +48,8 @@ object CliTransitions:
   enum CliEffect:
     case Render(role: Role, text: String)
     case RenderAssistantDelta(text: String)
-    case RenderAssistantComplete()
+    case RenderAssistantComplete
+    case ClearAssistantBuffer
     case RenderSpinner(spinner: SpinnerState, nowMillis: Long)
     case StopSpinner
     case SetEcho(enabled: Boolean)
@@ -88,21 +89,25 @@ object CliTransitions:
 
       case AssistantTextComplete(_) =>
         if state.running then
-          TransitionResult(state, List(RenderAssistantComplete()))
+          TransitionResult(state, List(RenderAssistantComplete))
         else TransitionResult(state, Nil)
 
       case ErrorText(text) =>
         if state.running then
           TransitionResult(
             state,
-            List(RenderAssistantComplete(), Render(Role.Error, text))
+            List(RenderAssistantComplete, Render(Role.Error, text))
           )
         else TransitionResult(state, Nil)
 
       case TurnFinished =>
         TransitionResult(
           state.copy(spinner = None, turnInFlight = false),
-          cancelSpinnerIfActive(state) ++ List(SetEcho(true), StopSpinner)
+          cancelSpinnerIfActive(state) ++ List(
+            SetEcho(true),
+            StopSpinner,
+            ClearAssistantBuffer
+          )
         )
 
       case SpinnerTick(now) =>

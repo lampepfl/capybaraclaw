@@ -201,8 +201,12 @@ class CliPort(
         case RenderAssistantDelta(text) =>
           renderAssistantDelta(text)
           rs
-        case RenderAssistantComplete() =>
+        case RenderAssistantComplete =>
           renderAssistantComplete()
+          rs
+        case ClearAssistantBuffer =>
+          streamBuffer.clear()
+          streamFirstLine = true
           rs
         case Render(role, text) =>
           renderEntry(role, text)
@@ -323,7 +327,7 @@ class CliPort(
   private def renderAssistantComplete(): Unit =
     val line = streamBuffer.toString()
     streamBuffer.clear()
-    printAssistant(line)
+    if line.nonEmpty then printAssistant(line)
     streamFirstLine = true
 
   private def printAssistant(text: String): Unit =
