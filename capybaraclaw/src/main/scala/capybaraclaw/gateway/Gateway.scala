@@ -27,8 +27,10 @@ class Gateway(
     contextProvider: ContextProvider,
     clawFactory: (
         String,
+        SessionId,
         List[tacit.agents.llm.endpoint.Message]
-    ) => ClawAgent = (wd, hist) => ClawAgent(wd, initialMessages = hist)
+    ) => ClawAgent = (wd, sid, hist) =>
+      ClawAgent(wd, sid, SessionSearch.empty, initialMessages = hist)
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
   private val portsById: Map[PortId, Port] = ports.map(p => p.id -> p).toMap
@@ -98,7 +100,7 @@ class Gateway(
         case Some(r) => r
         case None    =>
           val history = contextProvider.load(sessionId)
-          val claw = clawFactory(workDir, history)
+          val claw = clawFactory(workDir, sessionId, history)
           val runner =
             AgentRunner(sessionId, claw, contextProvider)
           runner.start()
