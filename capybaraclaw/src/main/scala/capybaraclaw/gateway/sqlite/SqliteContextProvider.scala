@@ -2,9 +2,15 @@ package capybaraclaw.gateway.sqlite
 
 import capybaraclaw.gateway.{
   ContextProvider,
+  SearchSort,
+  SearchTerms,
   SessionHandle,
+  SessionHit,
   SessionId,
-  SessionMetadata
+  SessionMetadata,
+  SessionSearch,
+  SessionSummary,
+  SessionWindow
 }
 import org.flywaydb.core.Flyway
 import org.sqlite.{SQLiteErrorCode, SQLiteException}
@@ -29,6 +35,7 @@ class SqliteContextProvider(
     baseDir: Path = SqliteContextProvider.defaultBaseDir,
     nowMillis: () => Long = () => Instant.now.toEpochMilli
 ) extends ContextProvider
+    with SessionSearch
     with AutoCloseable:
 
   private val dbFile = baseDir.resolve("state.db").toFile
@@ -108,6 +115,44 @@ class SqliteContextProvider(
         inTransaction:
           insertMessage(writer, sessionId, role, text)
 
+  def discover(
+      terms: SearchTerms,
+      limit: Int,
+      offset: Int,
+      window: Int,
+      sort: SearchSort,
+      excludeSession: Option[SessionId]
+  ): List[SessionHit] =
+    FtsQuery.compile(terms) match
+      case None            => Nil
+      case Some(matchExpr) =>
+        readers.withReader: reader =>
+          SessionSearchQueries.discover(
+            reader,
+            matchExpr,
+            limit,
+            offset,
+            window,
+            sort,
+            excludeSession
+          )
+
+  def scroll(
+      sessionId: SessionId,
+      aroundMessageId: Long,
+      window: Int
+  ): Option[SessionWindow] =
+    readers.withReader: reader =>
+      SessionSearchQueries.scroll(reader, sessionId, aroundMessageId, window)
+
+  def browse(
+      limit: Int,
+      offset: Int,
+      excludeSession: Option[SessionId]
+  ): List[SessionSummary] =
+    readers.withReader: reader =>
+      SessionSearchQueries.browse(reader, limit, offset, excludeSession)
+
   def close(): Unit =
     writeLock.synchronized:
       readers.close()
@@ -165,11 +210,12 @@ class SqliteContextProvider(
       text: String
   ): Unit =
     val sql =
-      "INSERT INTO messages(session_id, role, text) VALUES (?, ?, ?)"
+      "INSERT INTO messages(session_id, role, text, created_at) VALUES (?, ?, ?, ?)"
     SqliteJdbc.withStatement(conn, sql): stmt =>
       stmt.setString(1, sessionId)
       stmt.setString(2, role)
       stmt.setString(3, text)
+      stmt.setLong(4, nowMillis())
       stmt.executeUpdate()
       ()
 

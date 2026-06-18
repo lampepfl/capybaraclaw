@@ -28,6 +28,7 @@ class Gateway(
     memory: MemoryDirectory,
     clawFactory: (
         String,
+        SessionId,
         List[tacit.agents.llm.endpoint.Message],
         MemoryAccess
     ) => ClawAgent
@@ -110,7 +111,7 @@ class Gateway(
           val history = contextProvider.load(sessionId)
           val access =
             memory.access(port.id, origin.user, port.conversation(origin))
-          val claw = clawFactory(workDir, history, access)
+          val claw = clawFactory(workDir, sessionId, history, access)
           val runner =
             AgentRunner(sessionId, claw, contextProvider)
           runner.start()

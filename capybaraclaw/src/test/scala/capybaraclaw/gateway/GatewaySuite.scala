@@ -320,13 +320,15 @@ class GatewaySuite extends munit.FunSuite:
       gatewayWorkDir: String,
       accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue()
   )(body: Async.Spawn ?=> Gateway => R): R =
-    val factory: (String, List[Message], MemoryAccess) => ClawAgent =
-      (wd, hist, access) =>
+    val factory: (String, SessionId, List[Message], MemoryAccess) => ClawAgent =
+      (wd, sid, hist, access) =>
         created.incrementAndGet()
         historySeen.offer(hist)
         accessSeen.offer(access)
         ClawAgent(
           wd,
+          sid,
+          SessionSearch.empty,
           initialMessages = hist,
           endpointOverride = Some(endpointFactory()),
           memory = access
