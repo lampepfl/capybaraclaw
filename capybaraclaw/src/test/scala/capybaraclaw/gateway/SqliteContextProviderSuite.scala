@@ -319,6 +319,19 @@ class SqliteContextProviderSuite extends munit.FunSuite:
     provider.close()
     provider.close() // must not throw
 
+  test("append stamps messages with created_at from the clock"):
+    withProvider(() => 4242L): (provider, dbPath) =>
+      val sessionId = provider.createSession(WD)
+      provider.append(sessionId, Message.user("hello"))
+      withConnection(dbPath): conn =>
+        val rows = queryRowsPrepared(
+          conn,
+          "SELECT created_at FROM messages WHERE session_id = ?",
+          List(sessionId)
+        )
+        assertEquals(rows.size, 1)
+        assertEquals(rows.head.head.toLong, 4242L)
+
   private def withProvider(
       nowMillis: () => Long = () => Instant.now.toEpochMilli
   )(body: (SqliteContextProvider, Path) => Unit): Unit =
