@@ -102,8 +102,14 @@ private object ClawMain extends CaseApp[CliOptions]:
             workDir,
             ports,
             contextProvider,
-            clawFactory = (wd, hist) =>
-              ClawAgent(wd, initialMessages = hist, memoryStore = memoryStore)
+            clawFactory = (wd, sid, hist) =>
+              ClawAgent(
+                wd,
+                sid,
+                contextProvider,
+                initialMessages = hist,
+                memoryStore = memoryStore
+              )
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())
