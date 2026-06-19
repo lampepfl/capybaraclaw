@@ -7,16 +7,18 @@ import capybaraclaw.gateway.{GatewayMessage, Origin}
 object CliTransitions:
   import CommandMatching.*
 
-  sealed trait CliEvent
-  final case class UserInput(raw: String) extends CliEvent
-  final case class AssistantText(text: String) extends CliEvent
-  final case class ErrorText(text: String) extends CliEvent
-  final case class SpinnerTick(nowMillis: Long) extends CliEvent
-  final case class HintTick(buffer: String) extends CliEvent
-  final case class InputReadFailed(error: Throwable) extends CliEvent
-  case object TurnFinished extends CliEvent
-  case object InputClosed extends CliEvent
-  case object ShutdownRequested extends CliEvent
+  enum CliEvent:
+    case UserInput(raw: String)
+    case AssistantTextDelta(text: String)
+    case AssistantTextComplete(text: String)
+    case ErrorText(text: String)
+    case SpinnerTick(nowMillis: Long)
+    case HintTick(buffer: String)
+    case InputReadFailed(error: Throwable)
+    case TurnFinished
+    case InputClosed
+    case ShutdownRequested
+  export CliEvent.*
 
   final case class SpinnerState(
       startedAtMillis: Long,
@@ -43,19 +45,20 @@ object CliTransitions:
   enum Role:
     case User, Assistant, Error
 
-  sealed trait CliEffect
-  object CliEffect:
-    final case class Render(role: Role, text: String) extends CliEffect
-    final case class RenderSpinner(spinner: SpinnerState, nowMillis: Long)
-        extends CliEffect
-    case object StopSpinner extends CliEffect
-    final case class SetEcho(enabled: Boolean) extends CliEffect
-    case object StartSpinnerFiber extends CliEffect
-    case object CancelSpinnerFiber extends CliEffect
-    final case class SendOutbound(msg: GatewayMessage) extends CliEffect
-    case object RenderSessionsList extends CliEffect
-    case object RenderCurrentInfo extends CliEffect
-    final case class RenderHintStatus(text: String) extends CliEffect
+  enum CliEffect:
+    case Render(role: Role, text: String)
+    case RenderAssistantDelta(text: String)
+    case RenderAssistantComplete
+    case ClearAssistantBuffer
+    case RenderSpinner(spinner: SpinnerState, nowMillis: Long)
+    case StopSpinner
+    case SetEcho(enabled: Boolean)
+    case StartSpinnerFiber
+    case CancelSpinnerFiber
+    case SendOutbound(msg: GatewayMessage)
+    case RenderSessionsList
+    case RenderCurrentInfo
+    case RenderHintStatus(text: String)
 
   final case class TransitionContext(
       now: Long,
@@ -79,20 +82,32 @@ object CliTransitions:
       case UserInput(raw) =>
         userInputTransition(state, raw, ctx)
 
-      case AssistantText(text) =>
+      case AssistantTextDelta(text) =>
         if state.running then
-          TransitionResult(state, List(Render(Role.Assistant, text)))
+          TransitionResult(state, List(RenderAssistantDelta(text)))
+        else TransitionResult(state, Nil)
+
+      case AssistantTextComplete(_) =>
+        if state.running then
+          TransitionResult(state, List(RenderAssistantComplete))
         else TransitionResult(state, Nil)
 
       case ErrorText(text) =>
         if state.running then
-          TransitionResult(state, List(Render(Role.Error, text)))
+          TransitionResult(
+            state,
+            List(RenderAssistantComplete, Render(Role.Error, text))
+          )
         else TransitionResult(state, Nil)
 
       case TurnFinished =>
         TransitionResult(
           state.copy(spinner = None, turnInFlight = false),
-          cancelSpinnerIfActive(state) ++ List(SetEcho(true), StopSpinner)
+          cancelSpinnerIfActive(state) ++ List(
+            SetEcho(true),
+            StopSpinner,
+            ClearAssistantBuffer
+          )
         )
 
       case SpinnerTick(now) =>

@@ -113,11 +113,15 @@ trait Port:
   def id: PortId
   def incoming: ReadableChannel[GatewayMessage]
   def validateOriginForReply(origin: Origin): Unit
-  def send(sessionId: SessionId, origin: Origin, text: String): Unit
-  def sendError(sessionId: SessionId, origin: Origin, text: String): Unit
+  def openReply(sessionId: SessionId, origin: Origin): ReplyStream
   def onTurnFinished(sessionId: SessionId, origin: Origin): Unit
   def rejectInbound(origin: Origin, text: String): Unit
   def shutdown(): Unit
+
+trait ReplyStream:
+  def delta(text: String): Unit
+  def complete(finalText: String): Unit
+  def abort(reason: String): Unit
 
 trait ContextProvider:
   def createSession(workdir: String): SessionId

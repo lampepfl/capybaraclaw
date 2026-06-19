@@ -12,30 +12,30 @@ import gears.async.{ReadableChannel, UnboundedChannel}
 
 class SlackPortSuite extends munit.FunSuite:
 
-  test("send routes a channel handle as a top-level Slack message"):
+  test("complete routes a channel handle as a top-level Slack message"):
     val bot = FakeSlackApi()
     val port = SlackPort(bot)
     val sessionId = SessionId.random()
     val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123"))
 
-    port.send(sessionId, origin, "hello")
+    port.openReply(sessionId, origin).complete("hello")
 
     assertEquals(bot.sent.toList, List(Sent("C123", "hello", None)))
 
-  test("send routes a channel/thread handle as a Slack thread reply"):
+  test("complete routes a channel/thread handle as a Slack thread reply"):
     val bot = FakeSlackApi()
     val port = SlackPort(bot)
     val sessionId = SessionId.random()
     val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/123.456"))
 
-    port.send(sessionId, origin, "hello")
+    port.openReply(sessionId, origin).complete("hello")
 
     assertEquals(
       bot.sent.toList,
       List(Sent("C123", "hello", Some("123.456")))
     )
 
-  test("send rejects direct session refs"):
+  test("complete rejects direct session refs"):
     val port = SlackPort(FakeSlackApi())
     val sessionId = SessionId.random()
     val origin = Origin(
@@ -45,16 +45,26 @@ class SlackPortSuite extends munit.FunSuite:
     )
 
     intercept[IllegalArgumentException]:
-      port.send(sessionId, origin, "hello")
+      port.openReply(sessionId, origin).complete("hello")
 
-  test("send rejects malformed Slack thread handles"):
+  test("complete rejects malformed Slack thread handles"):
     val port = SlackPort(FakeSlackApi())
     val sessionId = SessionId.random()
 
     List("/123.456", "C123/").foreach: raw =>
       val origin = slackOrigin(SessionHandle(SlackPort.Id, raw))
       intercept[IllegalArgumentException]:
-        port.send(sessionId, origin, "hello")
+        port.openReply(sessionId, origin).complete("hello")
+
+  test("abort sends an error-prefixed Slack message"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val sessionId = SessionId.random()
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123"))
+
+    port.openReply(sessionId, origin).abort("timeout")
+
+    assertEquals(bot.sent.toList, List(Sent("C123", "ERROR: timeout", None)))
 
   test(
     "rejectInbound on a thread handle delivers the error to the originating Slack thread"
