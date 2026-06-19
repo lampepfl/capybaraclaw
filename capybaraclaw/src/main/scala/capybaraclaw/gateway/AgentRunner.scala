@@ -4,14 +4,22 @@ import capybaraclaw.agent.ClawAgent
 import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, UnboundedChannel}
 import org.slf4j.LoggerFactory
+import scala.annotation.tailrec
 import scala.util.control.NonFatal
-import tacit.agents.llm.agentic.{AgentRun, AgentStreamEvent}
+import tacit.agents.llm.agentic.{AgentError, AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Message, StreamEvent}
 
 private[gateway] final case class RoutedGatewayMessage(
     message: GatewayMessage,
     replyPort: Port
 )
+
+private enum RunEvent:
+  case Emitted(event: AgentStreamEvent)
+  case Failed(error: AgentError)
+  case Closed
+
+private final case class TurnResult(finalText: String, aborted: Boolean)
 
 /** One runner per `sessionId`. Owns an inbox, processes messages one turn at a time
   * on its own fiber. While a turn is running, newly-arriving inbox messages are
@@ -40,30 +48,30 @@ class AgentRunner(
   def start()(using Async.Spawn): Future[Unit] =
     Future(runLoop())
 
+  @tailrec
   private def runLoop()(using Async.Spawn): Unit =
-    var running = true
-    while running do
-      inbox.read() match
-        case Right(routed) =>
-          val msg = routed.message
-          val replyPort = routed.replyPort
-          val replyStream = replyPort.openReply(sessionId, msg.origin)
-          try processTurn(msg, replyStream)
+    inbox.read() match
+      case Right(routed) =>
+        val msg = routed.message
+        val replyPort = routed.replyPort
+        val replyStream = replyPort.openReply(sessionId, msg.origin)
+        try processTurn(msg, replyStream)
+        catch
+          case NonFatal(e) =>
+            logger.error(s"[runner $sessionId] turn failed", e)
+            try replyStream.abort(e.getMessage)
+            catch case NonFatal(_) => ()
+        finally
+          try replyPort.onTurnFinished(sessionId, msg.origin)
           catch
             case NonFatal(e) =>
-              logger.error(s"[runner $sessionId] turn failed", e)
-              try replyStream.abort(e.getMessage)
-              catch case NonFatal(_) => ()
-          finally
-            try replyPort.onTurnFinished(sessionId, msg.origin)
-            catch
-              case NonFatal(e) =>
-                logger.error(
-                  s"[runner $sessionId] onTurnFinished failed",
-                  e
-                )
-        case Left(_) =>
-          running = false
+              logger.error(
+                s"[runner $sessionId] onTurnFinished failed",
+                e
+              )
+        runLoop()
+      case Left(_) =>
+        ()
 
   private def processTurn(msg: GatewayMessage, replyStream: ReplyStream)(using
       Async.Spawn
@@ -72,51 +80,64 @@ class AgentRunner(
     contextProvider.append(sessionId, Message.user(tagged))
 
     val run: AgentRun = claw.streamAsk(tagged)
-    var finalText: String = ""
-    var reading = true
 
-    while reading do
-      run.events.read() match
-        case Right(Right(AgentStreamEvent.Stream(StreamEvent.Delta(text)))) =>
+    import RunEvent.*
+    import AgentStreamEvent.*
+    import StreamEvent.*
+
+    @tailrec
+    def consume(finalText: String, aborted: Boolean): TurnResult =
+      readEvent(run) match
+        case Emitted(Stream(Delta(text))) =>
           replyStream.delta(text)
           drainSteers(run)
-        case Right(
-              Right(AgentStreamEvent.Stream(StreamEvent.Done(response)))
-            ) =>
-          finalText = response.message.text
+          consume(finalText, aborted)
+        case Emitted(Stream(Done(response))) =>
           drainSteers(run)
-        case Right(_) =>
+          consume(response.message.text, aborted)
+        case Emitted(_) =>
           drainSteers(run)
-        case Left(_) =>
-          reading = false
+          consume(finalText, aborted)
+        case Failed(error) =>
+          if !aborted then
+            logger.error(
+              s"[runner $sessionId] agent run failed: ${error.description}"
+            )
+            replyStream.abort(error.description)
+          consume(finalText, aborted = true)
+        case Closed =>
+          TurnResult(finalText, aborted)
 
-    if finalText.nonEmpty then
-      contextProvider.append(sessionId, Message.assistant(finalText))
-      try replyStream.complete(finalText)
-      catch
-        case NonFatal(e) =>
-          logger.error(s"[runner $sessionId] replyStream.complete failed", e)
+    val result = consume("", aborted = false)
+    if !result.aborted && result.finalText.nonEmpty then
+      contextProvider.append(sessionId, Message.assistant(result.finalText))
+      replyStream.complete(result.finalText)
+
+  private def readEvent(run: AgentRun)(using Async): RunEvent =
+    run.events.read() match
+      case Right(Right(event)) => RunEvent.Emitted(event)
+      case Right(Left(error))  => RunEvent.Failed(error)
+      case Left(_)             => RunEvent.Closed
 
   /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the
     * active run. Persist only after a successful steer: a rejected steer (race with
     * run termination) is re-delivered to the inbox so the next turn picks it up, and
     * persisting there instead of here keeps the transcript free of duplicates.
     */
+  @tailrec
   private def drainSteers(run: AgentRun): Unit =
-    var draining = true
-    while draining do
-      inbox.readSource.poll() match
-        case Some(Right(m)) =>
-          val t = tag(m.message)
-          run.steer(t) match
-            case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
-              contextProvider.append(sessionId, Message.user(t))
-            case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
-              try inbox.sendImmediately(m)
-              catch case _: gears.async.ChannelClosedException => ()
-              draining = false
-        case _ =>
-          draining = false
+    inbox.readSource.poll() match
+      case Some(Right(m)) =>
+        val t = tag(m.message)
+        run.steer(t) match
+          case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
+            contextProvider.append(sessionId, Message.user(t))
+            drainSteers(run)
+          case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
+            try inbox.sendImmediately(m)
+            catch case _: gears.async.ChannelClosedException => ()
+      case _ =>
+        ()
 
   private def tag(m: GatewayMessage): String =
     s"[${m.origin.user}] ${m.text}"

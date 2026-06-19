@@ -12,6 +12,7 @@ import capybaraclaw.gateway.{
 import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import org.slf4j.LoggerFactory
+import scala.util.control.NonFatal
 
 /** Gateway Port backed by Slack Socket Mode.
   *
@@ -78,7 +79,13 @@ class SlackPort(bot: SlackApi) extends Port:
         val handle = getSlackHandle(origin)
         val (channelId, threadTs) = decodeHandle(handle)
         logOutgoingMessage(sessionId, handle, finalText)
-        bot.sendMessage(channelId, finalText, threadTs)
+        try bot.sendMessage(channelId, finalText, threadTs)
+        catch
+          case NonFatal(e) =>
+            logger.warn(
+              s"[slack] failed to deliver reply for handle ${handle.value}",
+              e
+            )
       def abort(reason: String): Unit =
         complete(s"ERROR: $reason")
 
