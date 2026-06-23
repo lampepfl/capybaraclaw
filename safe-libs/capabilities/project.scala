@@ -1,4 +1,4 @@
-//> using scala 3.8.nightly
+//> using scala 3.nightly
 //> using options -language:experimental.captureChecking -language:experimental.modularity -language:experimental.saferExceptions
 //> using publish.organization "com.example"
 //> using publish.name "safemode-capabilities"

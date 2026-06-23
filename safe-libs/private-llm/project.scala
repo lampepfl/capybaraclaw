@@ -1,4 +1,4 @@
-//> using scala 3.8.nightly
+//> using scala 3.nightly
 //> using options -language:experimental.captureChecking -language:experimental.modularity -language:experimental.saferExceptions
 //> using dep "com.example::safemode-capabilities:0.1.0"
 //> using dep "com.lihaoyi::ujson:4.4.3"
