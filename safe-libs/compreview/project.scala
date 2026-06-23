@@ -1,4 +1,4 @@
-//> using scala 3.nightly
+//> using scala 3.10.0-RC1-bin-20260609-b34a019-NIGHTLY
 //> using options -language:experimental.captureChecking -language:experimental.modularity -language:experimental.saferExceptions
 //> using dep "com.example::safemode-capabilities:0.1.0"
 //> using dep "org.apache.poi:poi-ooxml:5.4.0"
