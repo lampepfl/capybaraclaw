@@ -16,7 +16,8 @@ case class AgentConfig(
     model: String = "minimax/minimax-m2.7",
     maxTokens: Int = 16000,
     thinking: Option[ThinkingMode] = None,
-    classifiedPaths: List[String] = Nil
+    classifiedPaths: List[String] = Nil,
+    memorySnapshot: MemorySnapshot = MemorySnapshot.empty
 ):
   def toLLMConfig: LLMConfig =
     LLMConfig(
@@ -27,37 +28,49 @@ case class AgentConfig(
     )
 
 object AgentConfig:
+  private val DefaultProvider = "openrouter"
+
   /** Load `${workDir}/claw.json` if present; otherwise use defaults. The
     * `thinking` mode is derived from the provider. A malformed file or a
     * wrong-typed field raises [[ConfigError]] with a message naming the file
     * and field.
     */
-  def load(workDir: String): AgentConfig =
+  def load(
+      workDir: String,
+      memorySnapshot: MemorySnapshot = MemorySnapshot.empty
+  ): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
-    val obj =
-      if !file.exists() then ujson.Obj().value
-      else
-        val raw = readAll(Source.fromFile(file))
+    if !file.exists() then
+      AgentConfig(
+        workDir = workDir,
+        provider = DefaultProvider,
+        thinking = deriveThinking(DefaultProvider),
+        memorySnapshot = memorySnapshot
+      )
+    else
+      val raw = readAll(Source.fromFile(file))
+      val obj =
         try ujson.read(raw).obj
         catch
           case NonFatal(e) =>
             throw ConfigError(
               s"claw.json is not a valid JSON object: ${e.getMessage}"
             )
-    val provider =
-      field(obj, "provider", "a string")(_.str).getOrElse("openrouter")
-    AgentConfig(
-      workDir = workDir,
-      provider = provider,
-      model = field(obj, "model", "a string")(_.str)
-        .getOrElse("minimax/minimax-m2.7"),
-      maxTokens =
-        field(obj, "max_tokens", "a number")(_.num.toInt).getOrElse(16000),
-      thinking = deriveThinking(provider),
-      classifiedPaths = field(obj, "classified_paths", "an array of strings")(
-        _.arr.map(_.str).toList
-      ).getOrElse(Nil)
-    )
+      val provider =
+        field(obj, "provider", "a string")(_.str).getOrElse(DefaultProvider)
+      AgentConfig(
+        workDir = workDir,
+        provider = provider,
+        model = field(obj, "model", "a string")(_.str)
+          .getOrElse("minimax/minimax-m2.7"),
+        maxTokens =
+          field(obj, "max_tokens", "a number")(_.num.toInt).getOrElse(16000),
+        thinking = deriveThinking(provider),
+        classifiedPaths = field(obj, "classified_paths", "an array of strings")(
+          _.arr.map(_.str).toList
+        ).getOrElse(Nil),
+        memorySnapshot = memorySnapshot
+      )
 
   /** Read an optional field through `extract`, turning any type mismatch into a
     * [[ConfigError]] that names the field and the expected shape. Returns None

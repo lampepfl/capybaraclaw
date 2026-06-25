@@ -1,6 +1,6 @@
 package capybaraclaw.gateway.port.cli
 
-import capybaraclaw.agent.AgentConfig
+import capybaraclaw.agent.{AgentConfig, MemoryFile, MemoryStore}
 import capybaraclaw.gateway.{
   ContextProvider,
   GatewayMessage,
@@ -51,7 +51,8 @@ class CliPort(
     user: UserId = UserId(sys.env.getOrElse("USER", "cli")),
     workDirFile: File = java.io.File(".").getCanonicalFile,
     sessionId: SessionId,
-    contextProvider: ContextProvider
+    contextProvider: ContextProvider,
+    memoryStore: MemoryStore
 ) extends Port:
   import CliPort.*
   import CliTransitions.*
@@ -61,7 +62,8 @@ class CliPort(
   private val events = UnboundedChannel[CliEvent]()
   private val inputReadPermits = UnboundedChannel[Unit]()
   private val shutdownPromise: Future.Promise[Unit] = Future.Promise[Unit]()
-  private val agentConfig = AgentConfig.load(workDirFile.getPath)
+  private val agentConfig =
+    AgentConfig.load(workDirFile.getPath, memoryStore.snapshot())
 
   private val (terminal: Terminal, terminalOwnsStdio: Boolean) =
     buildTerminal()
@@ -304,11 +306,17 @@ class CliPort(
     reader.printAbove(current.render + "\n")
 
   private def printHeader(): Unit =
+    val snap = agentConfig.memorySnapshot
     val header = box()(
       layout(
         " >_ Capybara".style(Style.Bold),
         "",
         rowTight(" model:     ".style(Style.Dim), agentConfig.model),
+        rowTight(
+          " memory:    ".style(Style.Dim),
+          s"${snap.memoryPct}% (${snap.memoryChars}/${MemoryFile.Memory.capacity}), " +
+            s"user ${snap.userPct}% (${snap.userChars}/${MemoryFile.User.capacity})"
+        ),
         rowTight(" session:   ".style(Style.Dim), sessionId.toString),
         rowTight(" directory: ".style(Style.Dim), tildify(workDirFile.getPath))
       )

@@ -34,7 +34,7 @@ class SystemPromptSuite extends munit.FunSuite:
     )
 
   workDir.test(
-    "build renders every section when config and CLAW.md are present"
+    "build renders every section when config, CLAW.md and memory are present"
   ): dir =>
     Files.writeString(
       dir.resolve("CLAW.md"),
@@ -45,7 +45,8 @@ class SystemPromptSuite extends munit.FunSuite:
       workDir = dir.toString,
       provider = "openrouter",
       model = "test/model",
-      classifiedPaths = List("secret/")
+      classifiedPaths = List("secret/"),
+      memorySnapshot = MemorySnapshot("memory marker", "user marker")
     )
 
     val expected =
@@ -58,17 +59,23 @@ class SystemPromptSuite extends munit.FunSuite:
         "\n\n" +
         """<project_instructions>
           |Be concise.
-          |</project_instructions>""".stripMargin
+          |</project_instructions>""".stripMargin +
+        "\n\n" +
+        SystemPromptSuite.memorySection(config.memorySnapshot)
 
     assertEquals(SystemPrompt.build(config), expected)
 
-  workDir.test("build emits only the system section without config or CLAW.md"):
-    dir =>
-      val config = AgentConfig(workDir = dir.toString)
-      assertEquals(
-        SystemPrompt.build(config),
-        SystemPromptSuite.systemSection(config)
-      )
+  workDir.test(
+    "build emits the system and memory sections without config or CLAW.md"
+  ): dir =>
+    val config = AgentConfig(workDir = dir.toString)
+
+    val expected =
+      SystemPromptSuite.systemSection(config) +
+        "\n\n" +
+        SystemPromptSuite.memorySection(config.memorySnapshot)
+
+    assertEquals(SystemPrompt.build(config), expected)
 
 object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
@@ -76,8 +83,24 @@ object SystemPromptSuite:
       "prompts/system.md",
       Map(
         "work_dir" -> config.workDir,
-        "config" -> config.toString,
         "interface_source" -> interfaceSource
+      )
+    )
+
+  private def memorySection(snap: MemorySnapshot): String =
+    SystemPrompt.renderResource(
+      "prompts/memory.md",
+      Map(
+        "memory_usage" -> snap.memoryPct.toString,
+        "memory_chars" -> snap.memoryChars.toString,
+        "memory_capacity" -> MemoryFile.Memory.capacity.toString,
+        "memory_content" ->
+          Option.when(snap.memory.nonEmpty)(snap.memory).getOrElse("(empty)"),
+        "user_usage" -> snap.userPct.toString,
+        "user_chars" -> snap.userChars.toString,
+        "user_capacity" -> MemoryFile.User.capacity.toString,
+        "user_content" ->
+          Option.when(snap.user.nonEmpty)(snap.user).getOrElse("(empty)")
       )
     )
 
