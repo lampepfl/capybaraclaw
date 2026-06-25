@@ -50,6 +50,6 @@ trait Port extends AutoCloseable:
   override def close(): Unit = shutdown()
 
 trait ReplyStream:
-  def delta(text: String): Unit
+  def delta(text: String): ReplyStream
   def complete(finalText: String): Unit
   def abort(reason: String): Unit

@@ -13,6 +13,20 @@ class SlackBot(botToken: String, appToken: String) extends SlackApi:
   ): String =
     client.sendMessage(channel, text, threadTs)
 
+  def startStream(
+      channel: String,
+      threadTs: String,
+      recipientUserId: Option[String],
+      markdown: String
+  ): String =
+    client.startStream(channel, threadTs, recipientUserId, markdown)
+
+  def appendStream(channel: String, ts: String, markdown: String): Unit =
+    client.appendStream(channel, ts, markdown)
+
+  def stopStream(channel: String, ts: String): Unit =
+    client.stopStream(channel, ts)
+
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     client.readHistory(channel, limit)
 

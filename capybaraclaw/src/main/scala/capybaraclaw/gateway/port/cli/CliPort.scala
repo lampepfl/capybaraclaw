@@ -80,6 +80,7 @@ class CliPort(
   private val priorTurnCount: Int =
     contextProvider.load(sessionId).count(_.role == MessageRole.User)
 
+  // TODO: consider moving this to RuntimeState
   // Accumulate assistant stream text to print it line by line.
   // This avoids some issues with jline printing.
   private var streamFirstLine = true
@@ -105,8 +106,9 @@ class CliPort(
 
   override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
     new ReplyStream:
-      def delta(text: String): Unit =
+      def delta(text: String): ReplyStream =
         offerEvent(AssistantTextDelta(text))
+        this
       def complete(finalText: String): Unit =
         offerEvent(AssistantTextComplete(finalText))
       def abort(reason: String): Unit =

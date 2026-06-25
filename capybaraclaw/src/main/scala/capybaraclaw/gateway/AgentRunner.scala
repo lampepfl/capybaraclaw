@@ -19,7 +19,11 @@ private enum RunEvent:
   case Failed(error: AgentError)
   case Closed
 
-private final case class TurnResult(finalText: String, aborted: Boolean)
+private final case class TurnResult(
+    replyStream: ReplyStream,
+    finalText: String,
+    aborted: Boolean
+)
 
 /** One runner per `sessionId`. Owns an inbox, processes messages one turn at a time
   * on its own fiber. While a turn is running, newly-arriving inbox messages are
@@ -86,32 +90,50 @@ class AgentRunner(
     import StreamEvent.*
 
     @tailrec
-    def consume(finalText: String, aborted: Boolean): TurnResult =
+    def consume(
+        reply: ReplyStream,
+        finalText: String,
+        aborted: Boolean
+    ): TurnResult =
       readEvent(run) match
         case Emitted(Stream(Delta(text))) =>
-          replyStream.delta(text)
+          val next = reply.delta(text)
           drainSteers(run)
-          consume(finalText, aborted)
+          consume(next, finalText, aborted)
         case Emitted(Stream(Done(response))) =>
           drainSteers(run)
-          consume(response.message.text, aborted)
+          consume(reply, response.message.text, aborted)
         case Emitted(_) =>
           drainSteers(run)
-          consume(finalText, aborted)
+          consume(reply, finalText, aborted)
         case Failed(error) =>
           if !aborted then
             logger.error(
               s"[runner $sessionId] agent run failed: ${error.description}"
             )
-            replyStream.abort(error.description)
-          consume(finalText, aborted = true)
+            reply.abort(error.description)
+          consume(reply, finalText, aborted = true)
         case Closed =>
-          TurnResult(finalText, aborted)
+          TurnResult(reply, finalText, aborted)
 
-    val result = consume("", aborted = false)
-    if !result.aborted && result.finalText.nonEmpty then
-      contextProvider.append(sessionId, Message.assistant(result.finalText))
-      replyStream.complete(result.finalText)
+    val result = consume(replyStream, "", aborted = false)
+    if !result.aborted then
+      if result.finalText.nonEmpty then
+        try
+          contextProvider.append(sessionId, Message.assistant(result.finalText))
+        catch
+          case NonFatal(e) =>
+            logger.error(
+              s"[runner $sessionId] failed to persist assistant reply",
+              e
+            )
+      try result.replyStream.complete(result.finalText)
+      catch
+        case NonFatal(e) =>
+          logger.error(
+            s"[runner $sessionId] failed to finalize reply stream",
+            e
+          )
 
   private def readEvent(run: AgentRun)(using Async): RunEvent =
     run.events.read() match
@@ -131,7 +153,10 @@ class AgentRunner(
         val t = tag(m.message)
         run.steer(t) match
           case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
-            contextProvider.append(sessionId, Message.user(t))
+            try contextProvider.append(sessionId, Message.user(t))
+            catch
+              case NonFatal(e) =>
+                logger.error(s"[runner $sessionId] failed to persist steer", e)
             drainSteers(run)
           case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
             try inbox.sendImmediately(m)

@@ -1,12 +1,18 @@
 package capybaraclaw.gateway.port.slack
 
 import com.slack.api.Slack
-import com.slack.api.methods.MethodsClient
-import com.slack.api.methods.request.chat.ChatPostMessageRequest
+import com.slack.api.methods.{MethodsClient, SlackApiTextResponse}
+import com.slack.api.methods.request.chat.{
+  ChatAppendStreamRequest,
+  ChatPostMessageRequest,
+  ChatStartStreamRequest,
+  ChatStopStreamRequest
+}
 import com.slack.api.methods.request.conversations.{
   ConversationsHistoryRequest,
   ConversationsInfoRequest
 }
+import com.slack.api.methods.request.auth.AuthTestRequest
 import com.slack.api.methods.request.users.UsersInfoRequest
 import com.slack.api.bolt.{App, AppConfig}
 import com.slack.api.bolt.socket_mode.SocketModeApp
@@ -93,8 +99,21 @@ class SlackClient(botToken: String, appToken: String):
   private val slack = Slack.getInstance()
   private val methods: MethodsClient = slack.methods(botToken)
 
+  private def ensureOk(
+      response: SlackApiTextResponse,
+      context: String = ""
+  ): Unit =
+    if !response.isOk then
+      val where = if context.isEmpty then "" else s" ($context)"
+      throw RuntimeException(s"Slack API error$where: ${response.getError}")
+
   private val channelCache = mutable.Map[String, Channel]()
   private val userCache = mutable.Map[String, User]()
+
+  private lazy val teamId: String =
+    val response = methods.authTest(AuthTestRequest.builder().build())
+    ensureOk(response)
+    response.getTeamId.nn
 
   /** Resolve a channel by ID (cached). */
   def getChannel(id: String): Channel =
@@ -130,8 +149,7 @@ class SlackClient(botToken: String, appToken: String):
         .text(chunk) // fallback for notifications
       threadTs.foreach(ts => builder.threadTs(ts))
       val response = methods.chatPostMessage(builder.build())
-      if !response.isOk then
-        throw RuntimeException(s"Slack API error: ${response.getError}")
+      ensureOk(response)
       lastTs = response.getTs.nn
     lastTs
 
@@ -160,6 +178,44 @@ class SlackClient(botToken: String, appToken: String):
         remaining = remaining.substring(splitAt)
     chunks.toList
 
+  def startStream(
+      channel: String,
+      threadTs: String,
+      recipientUserId: Option[String],
+      markdown: String
+  ): String =
+    val builder = ChatStartStreamRequest
+      .builder()
+      .channel(channel)
+      .threadTs(threadTs)
+      .markdownText(markdown)
+      .recipientTeamId(teamId)
+    recipientUserId.foreach(u => builder.recipientUserId(u))
+    val response = methods.chatStartStream(builder.build())
+    ensureOk(response)
+    response.getTs.nn
+
+  def appendStream(channel: String, ts: String, markdown: String): Unit =
+    val response = methods.chatAppendStream(
+      ChatAppendStreamRequest
+        .builder()
+        .channel(channel)
+        .ts(ts)
+        .markdownText(markdown)
+        .build()
+    )
+    ensureOk(response)
+
+  def stopStream(channel: String, ts: String): Unit =
+    val response = methods.chatStopStream(
+      ChatStopStreamRequest
+        .builder()
+        .channel(channel)
+        .ts(ts)
+        .build()
+    )
+    ensureOk(response)
+
   /** Read recent messages from a channel. */
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     val response = methods.conversationsHistory(
@@ -169,8 +225,7 @@ class SlackClient(botToken: String, appToken: String):
         .limit(limit)
         .build()
     )
-    if !response.isOk then
-      throw RuntimeException(s"Slack API error: ${response.getError}")
+    ensureOk(response)
     response.getMessages.nn.asScala.toList.map: msg =>
       Message(
         userId = Option(msg.getUser).getOrElse(""),
@@ -243,18 +298,12 @@ class SlackClient(botToken: String, appToken: String):
     val response = methods.conversationsInfo(
       ConversationsInfoRequest.builder().channel(id).build()
     )
-    if !response.isOk then
-      throw RuntimeException(
-        s"Slack API error (conversations.info): ${response.getError}"
-      )
+    ensureOk(response, "conversations.info")
     Channel.fromConversation(response.getChannel.nn)
 
   private def fetchUser(id: String): User =
     val response = methods.usersInfo(
       UsersInfoRequest.builder().user(id).build()
     )
-    if !response.isOk then
-      throw RuntimeException(
-        s"Slack API error (users.info): ${response.getError}"
-      )
+    ensureOk(response, "users.info")
     User.fromSdkUser(response.getUser.nn)

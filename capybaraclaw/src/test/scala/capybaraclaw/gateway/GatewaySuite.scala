@@ -88,7 +88,7 @@ class FakePort(override val id: PortId) extends Port:
 
   override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
     new ReplyStream:
-      def delta(text: String): Unit = ()
+      def delta(text: String): ReplyStream = this
       def complete(finalText: String): Unit =
         sentReplies.put(
           FakePort.Reply(sessionId, FakePort.replyHandle(origin), finalText)
