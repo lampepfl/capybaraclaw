@@ -28,6 +28,14 @@ trait Port extends AutoCloseable:
     */
   def openReply(sessionId: SessionId, origin: Origin): ReplyStream
 
+  /** Notify the port that a tool call finished, with its name and arguments. */
+  def sendToolCall(
+      sessionId: SessionId,
+      origin: Origin,
+      toolName: String,
+      args: String
+  ): Unit = ()
+
   /** Called after a turn for `sessionId` finishes, regardless of whether it
     * produced a reply. Ports that want to block input until a turn is done can
     * override this.
