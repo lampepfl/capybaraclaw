@@ -9,6 +9,16 @@ trait SlackApi:
       threadTs: Option[String] = None
   ): String
 
+  def startStream(
+      channel: String,
+      threadTs: String,
+      /** Required for channels, optional for DMs. */
+      recipientUserId: Option[String],
+      markdown: String
+  ): String
+
+  def appendStream(channel: String, ts: String, markdown: String): Unit
+  def stopStream(channel: String, ts: String): Unit
   def readHistory(channel: String, limit: Int = 32): List[Message]
   def getChannel(id: String): Channel
   def getUser(id: String): User
