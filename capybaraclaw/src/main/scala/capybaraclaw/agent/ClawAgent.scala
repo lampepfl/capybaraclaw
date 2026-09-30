@@ -18,12 +18,8 @@ class ClawAgent(
   private val replEnv: ReplEnvironment =
     ReplEnvironment(workDir, agentConfig.classifiedPaths)
 
-  private given Endpoint = endpointOverride.getOrElse(agentConfig.provider match
-    case "anthropic"  => AnthropicEndpoint.createFromEnv()
-    case "openai"     => OpenAIEndpoint.createFromEnv()
-    case "openrouter" => OpenRouterEndpoint.createFromEnv()
-    case "ollama"     => OllamaEndpoint.createFromEnv()
-    case other        => throw RuntimeException(s"Unknown provider: $other"))
+  private given Endpoint =
+    endpointOverride.getOrElse(agentConfig.provider.createEndpoint())
 
   private val agent: Agent =
     val a = new Agent:

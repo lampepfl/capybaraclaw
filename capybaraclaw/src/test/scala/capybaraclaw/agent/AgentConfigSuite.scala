@@ -25,11 +25,14 @@ class AgentConfigSuite extends munit.FunSuite:
 
   workDir.test("missing claw.json yields defaults"): dir =>
     val c = AgentConfig.load(dir.toString)
-    assertEquals(c.provider, "openrouter")
+    assertEquals(c.provider, Provider.OpenRouter)
     assertEquals(c.model, "minimax/minimax-m2.7")
     assertEquals(c.maxTokens, 16000)
     assertEquals(c.classifiedPaths, Nil)
-    assertEquals(c.thinking, Some(ThinkingMode.Effort(EffortLevel.Medium)))
+    assertEquals(
+      c.toLLMConfig.thinking,
+      Some(ThinkingMode.Effort(EffortLevel.Medium))
+    )
 
   workDir.test("valid claw.json is parsed"): dir =>
     writeConfig(
@@ -37,18 +40,18 @@ class AgentConfigSuite extends munit.FunSuite:
       """{"provider":"anthropic","model":"claude","max_tokens":42,"classified_paths":["a/","b"]}"""
     )
     val c = AgentConfig.load(dir.toString)
-    assertEquals(c.provider, "anthropic")
+    assertEquals(c.provider, Provider.Anthropic)
     assertEquals(c.model, "claude")
     assertEquals(c.maxTokens, 42)
     assertEquals(c.classifiedPaths, List("a/", "b"))
-    assertEquals(c.thinking, Some(ThinkingMode.Budget(2048)))
+    assertEquals(c.toLLMConfig.thinking, Some(ThinkingMode.Budget(2048)))
 
   workDir.test("present-but-partial config keeps defaults for missing fields"):
     dir =>
       writeConfig(dir, """{"model":"only-model"}""")
       val c = AgentConfig.load(dir.toString)
       assertEquals(c.model, "only-model")
-      assertEquals(c.provider, "openrouter")
+      assertEquals(c.provider, Provider.OpenRouter)
       assertEquals(c.maxTokens, 16000)
 
   workDir.test("malformed JSON raises a ConfigError naming claw.json"): dir =>

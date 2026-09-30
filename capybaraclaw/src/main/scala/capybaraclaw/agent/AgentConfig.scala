@@ -4,18 +4,53 @@ import scala.collection.Map
 import scala.io.Source
 import scala.util.control.NonFatal
 
-import tacit.agents.llm.endpoint.{EffortLevel, LLMConfig, ThinkingMode}
+import tacit.agents.llm.endpoint.*
 
 final class ConfigError(message: String) extends RuntimeException(message)
+
+/** An LLM provider selectable via `provider` in `claw.json`. */
+enum Provider(
+    val id: String,
+    val thinking: ThinkingMode,
+    endpoint: EndpointProvider
+):
+  case Anthropic
+      extends Provider(
+        "anthropic",
+        ThinkingMode.Budget(2048),
+        AnthropicEndpoint
+      )
+  case OpenAI
+      extends Provider(
+        "openai",
+        ThinkingMode.Effort(EffortLevel.Medium),
+        OpenAIEndpoint
+      )
+  case OpenRouter
+      extends Provider(
+        "openrouter",
+        ThinkingMode.Effort(EffortLevel.Medium),
+        OpenRouterEndpoint
+      )
+  case Ollama
+      extends Provider(
+        "ollama",
+        ThinkingMode.Effort(EffortLevel.Medium),
+        OllamaEndpoint
+      )
+
+  def createEndpoint(): Endpoint = endpoint.createFromEnv()
+
+object Provider:
+  def fromId(id: String): Option[Provider] = values.find(_.id == id)
 
 /** Configuration for a Claw agent instance.
   */
 case class AgentConfig(
     workDir: String,
-    provider: String = "openrouter",
+    provider: Provider = Provider.OpenRouter,
     model: String = "minimax/minimax-m2.7",
     maxTokens: Int = 16000,
-    thinking: Option[ThinkingMode] = None,
     classifiedPaths: List[String] = Nil
 ):
   def toLLMConfig: LLMConfig =
@@ -23,15 +58,11 @@ case class AgentConfig(
       model = model,
       systemPrompt = Some(SystemPrompt.build(this)),
       maxTokens = Some(maxTokens),
-      thinking = thinking
+      thinking = Some(provider.thinking)
     )
 
 object AgentConfig:
-  private val knownProviders =
-    List("anthropic", "openai", "openrouter", "ollama")
-
-  /** Load `${workDir}/claw.json` if present; otherwise use defaults. The
-    * `thinking` mode is derived from the provider. An unreadable or malformed
+  /** Load `${workDir}/claw.json` if present; otherwise use defaults. An unreadable or malformed
     * file, a wrong-typed field or an unknown provider raises [[ConfigError]]
     * with a message naming the file and field.
     */
@@ -53,11 +84,16 @@ object AgentConfig:
               s"$path is not a valid JSON object: ${e.getMessage}"
             )
     val provider =
-      field(obj, path, "provider", "a string")(_.str).getOrElse("openrouter")
-    if !knownProviders.contains(provider) then
-      throw ConfigError(
-        s"$path: 'provider' must be one of ${knownProviders.mkString(", ")}"
-      )
+      field(obj, path, "provider", "a string")(_.str)
+        .map: id =>
+          Provider
+            .fromId(id)
+            .getOrElse(
+              throw ConfigError(
+                s"$path: 'provider' must be one of ${Provider.values.map(_.id).mkString(", ")}"
+              )
+            )
+        .getOrElse(Provider.OpenRouter)
     AgentConfig(
       workDir = workDir,
       provider = provider,
@@ -66,7 +102,6 @@ object AgentConfig:
       maxTokens = field(obj, path, "max_tokens", "a positive integer")(
         positiveInt
       ).getOrElse(16000),
-      thinking = deriveThinking(provider),
       classifiedPaths =
         field(obj, path, "classified_paths", "an array of strings")(
           _.arr.map(_.str).toList
@@ -96,10 +131,3 @@ object AgentConfig:
         catch
           case NonFatal(_) =>
             throw ConfigError(s"$path: '$key' must be $expected")
-
-  private def deriveThinking(provider: String): Option[ThinkingMode] =
-    provider match
-      case "anthropic"                        => Some(ThinkingMode.Budget(2048))
-      case "openai" | "openrouter" | "ollama" =>
-        Some(ThinkingMode.Effort(EffortLevel.Medium))
-      case _ => None
