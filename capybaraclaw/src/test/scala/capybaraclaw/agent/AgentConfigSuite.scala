@@ -41,6 +41,7 @@ class AgentConfigSuite extends munit.FunSuite:
     assertEquals(c.model, "claude")
     assertEquals(c.maxTokens, 42)
     assertEquals(c.classifiedPaths, List("a/", "b"))
+    assertEquals(c.thinking, Some(ThinkingMode.Budget(2048)))
 
   workDir.test("present-but-partial config keeps defaults for missing fields"):
     dir =>
@@ -65,9 +66,49 @@ class AgentConfigSuite extends munit.FunSuite:
       writeConfig(dir, """{"max_tokens":"lots"}""")
       val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
       assert(ex.getMessage.contains("max_tokens"), ex.getMessage)
-      assert(ex.getMessage.contains("number"), ex.getMessage)
+      assert(ex.getMessage.contains("positive integer"), ex.getMessage)
 
   workDir.test("wrong-typed classified_paths names the field"): dir =>
     writeConfig(dir, """{"classified_paths":"not-an-array"}""")
     val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
     assert(ex.getMessage.contains("classified_paths"), ex.getMessage)
+
+  workDir.test("wrong-typed provider names the field"): dir =>
+    writeConfig(dir, """{"provider":42}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(ex.getMessage.contains("'provider' must be a string"), ex.getMessage)
+
+  workDir.test("unknown provider is rejected at load time"): dir =>
+    writeConfig(dir, """{"provider":"antropic"}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(ex.getMessage.contains("'provider' must be one of"), ex.getMessage)
+
+  workDir.test("null model names the field"): dir =>
+    writeConfig(dir, """{"model":null}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(ex.getMessage.contains("'model' must be a string"), ex.getMessage)
+
+  List("1.5", "0", "-3", "1e20").foreach: n =>
+    workDir.test(s"max_tokens $n is rejected as not a positive integer"): dir =>
+      writeConfig(dir, s"""{"max_tokens":$n}""")
+      val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(ex.getMessage.contains("positive integer"), ex.getMessage)
+
+  workDir.test("errors name the full path of claw.json"): dir =>
+    writeConfig(dir, """{"model":1}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(
+      ex.getMessage.contains(dir.resolve("claw.json").toString),
+      ex.getMessage
+    )
+
+  workDir.test("unreadable claw.json (a directory) raises a ConfigError"):
+    dir =>
+      Files.createDirectory(dir.resolve("claw.json"))
+      val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(ex.getMessage.contains("cannot read"), ex.getMessage)
+
+  workDir.test("invalid UTF-8 raises a ConfigError"): dir =>
+    Files.write(dir.resolve("claw.json"), Array[Byte](0x7b, 0xff.toByte, 0x7d))
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(ex.getMessage.contains("cannot read"), ex.getMessage)
