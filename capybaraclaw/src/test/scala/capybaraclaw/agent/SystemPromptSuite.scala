@@ -53,7 +53,7 @@ class SystemPromptSuite extends munit.FunSuite:
       SystemPromptSuite.systemSection(config) +
         "\n\n" +
         """<classified_paths>
-          |The following paths should be classified:
+          |The following paths are classified. Reading them yields `Classified[T]`: classified values cannot be unwrapped or printed directly. Write results derived from them only with the classified output function documented by show_interface.
           |- secret/
           |</classified_paths>""".stripMargin +
         "\n\n" +
@@ -111,10 +111,7 @@ object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
     SystemPrompt.renderResource(
       "prompts/system.md",
-      Map(
-        "work_dir" -> config.workDir,
-        "interface_source" -> interfaceSource
-      )
+      Map("work_dir" -> config.workDir)
     )
 
   private val snapshot: MemorySnapshot = MemorySnapshot(
@@ -131,15 +128,6 @@ object SystemPromptSuite:
       .findFirstMatchIn(prompt)
       .map(_.group(1).nn)
       .getOrElse(throw AssertionError(s"no boundary in: $prompt"))
-
-  private def interfaceSource: String =
-    try
-      val source = scala.io.Source.fromResource("Interface.scala")
-      try source.mkString
-      finally source.close()
-    catch
-      case _: java.io.FileNotFoundException =>
-        "(Interface.scala not found on classpath)"
 
   private def deleteRecursively(path: Path): Unit =
     if Files.exists(path) then

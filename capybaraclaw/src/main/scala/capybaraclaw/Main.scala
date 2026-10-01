@@ -2,7 +2,7 @@ package capybaraclaw
 
 import caseapp.*
 
-import capybaraclaw.agent.{ClawAgent, ConfigError}
+import capybaraclaw.agent.{ClawAgent, ConfigError, Plugins}
 import capybaraclaw.gateway.{
   Conversation,
   Gateway,
@@ -236,6 +236,15 @@ private def canonicalFile(path: String): Either[String, File] =
         s"[claw] failed to resolve workdir '$path': ${Throwables.errorMessage(e)}"
       )
 
+private def pluginsBannerLine(workDir: String): String =
+  if Plugins.scanDirs(workDir).isEmpty then "none (no plugins/ folder)"
+  else
+    try
+      Plugins.load(workDir) match
+        case Nil     => "none"
+        case plugins => plugins.map(Plugins.describe).mkString(", ")
+    catch case e: ConfigError => s"error: ${e.getMessage}"
+
 private def printStartupInfo(
     workDir: String,
     enableSlack: Boolean
@@ -247,6 +256,7 @@ private def printStartupInfo(
   println("Capybara Claw Gateway")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
+  println(s"  plugins  : ${pluginsBannerLine(workDir)}")
   println(s"  logs     : $logFile")
   println(s"  slack    : ${
       if enableSlack then "enabled"
