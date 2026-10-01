@@ -175,9 +175,9 @@ class SlackPort(bot: SlackApi) extends Port:
 
   def shutdown(): Unit =
     try outCh.close()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
     try bot.shutdown()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
 
   private def toOrigin(msg: Message): Origin =
     val raw = SlackPort.handleValue(msg.origin.channelId, msg.threadTs, msg.ts)

@@ -1,10 +1,11 @@
 package capybaraclaw.gateway.sqlite
 
 import java.sql.{Connection, PreparedStatement, ResultSet}
+import scala.util.control.NonFatal
 
 private[sqlite] def bestEffort(body: => Unit): Unit =
   try body
-  catch case _: Throwable => ()
+  catch case NonFatal(_) => ()
 
 private[sqlite] object SqliteJdbc:
 
