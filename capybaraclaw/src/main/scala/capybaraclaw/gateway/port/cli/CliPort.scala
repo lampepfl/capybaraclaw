@@ -494,7 +494,7 @@ object CliPort:
     systemAttempts.iterator
       .flatMap: mk =>
         try Some(mk())
-        catch case _: Throwable => None
+        catch case NonFatal(_) => None
       .nextOption()
       .map(t => (t, false))
       .getOrElse:
