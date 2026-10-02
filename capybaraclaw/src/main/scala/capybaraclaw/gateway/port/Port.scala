@@ -1,6 +1,12 @@
 package capybaraclaw.gateway.port
 
-import capybaraclaw.gateway.{GatewayMessage, Origin, PortId, SessionId}
+import capybaraclaw.gateway.{
+  ApprovalRequest,
+  Inbound,
+  Origin,
+  PortId,
+  SessionId
+}
 import gears.async.ReadableChannel
 
 /** A message source/sink through which the Gateway talks to the outside world.
@@ -14,7 +20,7 @@ trait Port extends AutoCloseable:
   def id: PortId
 
   /** Messages arriving on this port. Every message's `origin.port` must equal `id`. */
-  def incoming: ReadableChannel[GatewayMessage]
+  def incoming: ReadableChannel[Inbound]
 
   /** Validate that this port can later send a reply for `origin`. Gateway calls
     * this before handing a message to an AgentRunner so malformed origins fail
@@ -34,6 +40,19 @@ trait Port extends AutoCloseable:
       origin: Origin,
       toolName: String,
       args: String
+  ): Unit = ()
+
+  /** Whether this port can show [[requestApproval]] prompts and send back
+    * `ApprovalReply`s. Without it, requests that need approval are denied
+    * outright.
+    */
+  def supportsApprovals: Boolean = false
+
+  /** Show the user a permission request made by agent code during a turn. */
+  def requestApproval(
+      sessionId: SessionId,
+      origin: Origin,
+      request: ApprovalRequest
   ): Unit = ()
 
   /** Called after a turn for `sessionId` finishes, regardless of whether it

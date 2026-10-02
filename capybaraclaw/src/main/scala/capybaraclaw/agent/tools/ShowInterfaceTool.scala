@@ -12,15 +12,11 @@ object ShowInterfaceTool:
   val name: String = "show_interface"
   val description: String =
     "Returns the exact API available in the evaluate_scala REPL for this " +
-      "workdir, including any loaded plugins. Call it before your first " +
-      "evaluate_scala in a task instead of guessing method names."
+      "workdir, including any loaded plugins (the same reference as in the " +
+      "system prompt). Use it instead of guessing method names."
 
-  def register(
-      agent: Agent,
-      plugins: List[LoadedPlugin],
-      coreInterface: String
-  ): Unit =
-    val text = reference(plugins, coreInterface)
+  def register(agent: Agent, apiReference: String): Unit =
+    val text = s"$apiReference\n\n$closing"
     agent.handle[Args](name, description): (_, _) =>
       text
 
@@ -46,3 +42,12 @@ object ShowInterfaceTool:
        |Scala standard library side effects (java.io, java.nio, scala.io,
        |sys.process, java.net, ...) is rejected by the REPL's code validator.
        |Everything listed here is already imported in every evaluate_scala call.""".stripMargin
+
+  // Small models tend to discuss the API after reading it instead of going
+  // back to the user's task; this steers them to act.
+  private val closing: String =
+    """|---
+       |
+       |Now return to the user's request. Your next step is an evaluate_scala
+       |call that works on it with the API above. Do not summarize or comment on
+       |the API, and do not write code in chat: it does not run.""".stripMargin

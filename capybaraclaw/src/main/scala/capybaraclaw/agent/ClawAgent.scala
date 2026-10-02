@@ -20,27 +20,31 @@ class ClawAgent(
     sessionSearch: SessionSearch,
     initialMessages: List[Message] = Nil,
     endpointOverride: Option[Endpoint] = None,
-    memoryStore: MemoryStore = MemoryStore.default()
+    memoryStore: MemoryStore = MemoryStore.default(),
+    permissionOracle: Option[String => String] = None
 ):
   val agentConfig: AgentConfig =
     AgentConfig.load(workDir, memoryStore.snapshot())
 
   private val replEnv: ReplEnvironment =
-    ReplEnvironment(workDir, agentConfig.classifiedPaths)
+    ReplEnvironment(workDir, agentConfig.classifiedPaths, permissionOracle)
 
   private given Endpoint =
     endpointOverride.getOrElse(agentConfig.provider.createEndpoint())
+
+  private val apiReference: String =
+    ShowInterfaceTool.reference(replEnv.loadedPlugins, replEnv.coreInterface)
 
   private val agent: Agent =
     val a = new Agent:
       type State = AgentState
       def getInitState = new AgentState:
-        val llmConfig = agentConfig.toLLMConfig
+        val llmConfig = agentConfig.toLLMConfig(apiReference)
 
     EvalScalaTool.register(a, replEnv.repl)
     MemoryTool.register(a, memoryStore)
     SessionSearchTool.register(a, sessionSearch, sessionId)
-    ShowInterfaceTool.register(a, replEnv.loadedPlugins, replEnv.coreInterface)
+    ShowInterfaceTool.register(a, apiReference)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue
     // where they left off.

@@ -63,7 +63,7 @@ class SystemPromptSuite extends munit.FunSuite:
         "\n\n" +
         SystemPromptSuite.memorySection(config.memorySnapshot)
 
-    assertEquals(SystemPrompt.build(config), expected)
+    assertEquals(SystemPrompt.build(config, "the API"), expected)
 
   workDir.test(
     "build emits the system and memory sections without config or CLAW.md"
@@ -75,13 +75,13 @@ class SystemPromptSuite extends munit.FunSuite:
         "\n\n" +
         SystemPromptSuite.memorySection(config.memorySnapshot)
 
-    assertEquals(SystemPrompt.build(config), expected)
+    assertEquals(SystemPrompt.build(config, "the API"), expected)
 
 object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
     SystemPrompt.renderResource(
       "prompts/system.md",
-      Map("work_dir" -> config.workDir)
+      Map("work_dir" -> config.workDir, "api_reference" -> "the API")
     )
 
   private def memorySection(snap: MemorySnapshot): String =

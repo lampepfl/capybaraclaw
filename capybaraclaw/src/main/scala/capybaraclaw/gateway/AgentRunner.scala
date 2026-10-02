@@ -36,7 +36,8 @@ private final case class TurnResult(
 class AgentRunner(
     sessionId: SessionId,
     claw: ClawAgent,
-    contextProvider: ContextProvider
+    contextProvider: ContextProvider,
+    approvals: ApprovalBroker
 ):
   private val logger = LoggerFactory.getLogger(classOf[AgentRunner])
   private val inbox = UnboundedChannel[RoutedGatewayMessage]()
@@ -59,6 +60,7 @@ class AgentRunner(
         val msg = routed.message
         val replyPort = routed.replyPort
         val replyStream = replyPort.openReply(sessionId, msg.origin)
+        approvals.beginTurn(sessionId, replyPort, msg.origin)
         try processTurn(msg, replyPort, replyStream)
         catch
           case NonFatal(e) =>
@@ -66,6 +68,7 @@ class AgentRunner(
             try replyStream.abort(e.getMessage)
             catch case NonFatal(_) => ()
         finally
+          approvals.endTurn(sessionId)
           try replyPort.onTurnFinished(sessionId, msg.origin)
           catch
             case NonFatal(e) =>

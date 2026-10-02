@@ -12,7 +12,7 @@ object CommandMatching:
   final case class HintResult(matches: List[String], truncated: Boolean)
 
   def topMatches(input: String, limit: Int): HintResult =
-    val needle = input.trim.toLowerCase
+    val needle = CliCommands.commandWord(input)
     if !needle.startsWith("/") then HintResult(Nil, false)
     else if needle.length > MaxHintInputLength then HintResult(Nil, false)
     else

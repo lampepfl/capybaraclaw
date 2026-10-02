@@ -30,7 +30,7 @@ class AgentConfigSuite extends munit.FunSuite:
     assertEquals(c.maxTokens, 16000)
     assertEquals(c.classifiedPaths, Nil)
     assertEquals(
-      c.toLLMConfig.thinking,
+      c.toLLMConfig("").thinking,
       Some(ThinkingMode.Effort(EffortLevel.Medium))
     )
 
@@ -44,7 +44,11 @@ class AgentConfigSuite extends munit.FunSuite:
     assertEquals(c.model, "claude")
     assertEquals(c.maxTokens, 42)
     assertEquals(c.classifiedPaths, List("a/", "b"))
-    assertEquals(c.toLLMConfig.thinking, Some(ThinkingMode.Budget(2048)))
+    assertEquals(c.toLLMConfig("").thinking, Some(ThinkingMode.Budget(2048)))
+
+  workDir.test("ollama runs without thinking"): dir =>
+    writeConfig(dir, """{"provider":"ollama"}""")
+    assertEquals(AgentConfig.load(dir.toString).toLLMConfig("").thinking, None)
 
   workDir.test("present-but-partial config keeps defaults for missing fields"):
     dir =>
