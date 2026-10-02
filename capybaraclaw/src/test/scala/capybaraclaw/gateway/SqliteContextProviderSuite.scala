@@ -10,6 +10,7 @@ import java.time.Instant
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch}
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
 
 class SqliteContextProviderSuite extends munit.FunSuite:
 
@@ -177,7 +178,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
                   )
                   ()
                 catch
-                  case e: Throwable =>
+                  case NonFatal(e) =>
                     errors.offer(e)
                     ()
           )
@@ -191,6 +192,7 @@ class SqliteContextProviderSuite extends munit.FunSuite:
           0,
           errors.iterator().asScala.toList.map(_.toString).mkString("\n")
         )
+        assertEquals(results.size(), 2)
         assertEquals(results.iterator().asScala.toList.distinct.size, 1)
       finally providerB.close()
     finally providerA.close()

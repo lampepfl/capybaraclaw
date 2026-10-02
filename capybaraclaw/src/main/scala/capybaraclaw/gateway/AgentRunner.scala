@@ -47,7 +47,7 @@ class AgentRunner(
 
   def close(): Unit =
     try inbox.close()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
 
   def start()(using Async.Spawn): Future[Unit] =
     Future(runLoop())
