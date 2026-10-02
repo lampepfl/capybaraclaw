@@ -21,8 +21,8 @@ ThisBuild / resolvers += Resolver.scalaNightlyRepository
 
 val stableScala3Version = "3.8.4"
 
-val tacitVersion = "0.2.0-SNAPSHOT"
-val tacitLibraryVersion = "0.2.0-SNAPSHOT"
+val tacitVersion = "0.2.1-SNAPSHOT"
+val tacitLibraryVersion = "0.2.1-SNAPSHOT"
 
 lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
   val quotedArgs = args.map { arg =>
