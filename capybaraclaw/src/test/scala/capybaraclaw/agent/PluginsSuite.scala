@@ -18,13 +18,14 @@ class PluginsSuite extends munit.FunSuite:
     Files.createDirectory(dir.resolve("plugins"))
     assertEquals(Plugins.load(dir.toString), Nil)
 
-  workDir.test("a valid plugin jar is loaded with its manifest and docs"): dir =>
-    TestPlugins.write(dir, "demo.jar", apiMode = "replace-core")
-    val List(plugin) = Plugins.load(dir.toString): @unchecked
-    assertEquals(plugin.manifest.id, "test.demo")
-    assertEquals(plugin.manifest.apiMode, ApiMode.ReplaceCore)
-    assertEquals(plugin.apiDocs, "demo docs")
-    assertEquals(Plugins.describe(plugin), "Demo 1.0 (replace-core)")
+  workDir.test("a valid plugin jar is loaded with its manifest and docs"):
+    dir =>
+      TestPlugins.write(dir, "demo.jar", apiMode = "replace-core")
+      val List(plugin) = Plugins.load(dir.toString): @unchecked
+      assertEquals(plugin.manifest.id, "test.demo")
+      assertEquals(plugin.manifest.apiMode, ApiMode.ReplaceCore)
+      assertEquals(plugin.apiDocs, "demo docs")
+      assertEquals(Plugins.describe(plugin), "Demo 1.0 (replace-core)")
 
   workDir.test("a broken plugin jar raises a ConfigError naming plugins/"):
     dir =>

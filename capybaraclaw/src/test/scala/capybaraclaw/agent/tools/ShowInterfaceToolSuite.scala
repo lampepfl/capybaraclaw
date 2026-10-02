@@ -27,7 +27,8 @@ class ShowInterfaceToolSuite extends munit.FunSuite:
     assert(!ref.contains("# Loaded plugins"), ref)
 
   test("replace-core plugin shows its metadata and docs and hides core"):
-    val ref = ShowInterfaceTool.reference(List(plugin(ApiMode.ReplaceCore)), core)
+    val ref =
+      ShowInterfaceTool.reference(List(plugin(ApiMode.ReplaceCore)), core)
     assert(ref.contains("## Comp Review 0.1.0 — Compensation"), ref)
     assert(ref.contains("Mode: replace-core"), ref)
     assert(ref.contains("xlsx-backed analytics."), ref)
