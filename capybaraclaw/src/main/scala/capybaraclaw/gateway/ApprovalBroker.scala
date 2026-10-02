@@ -5,8 +5,11 @@ import capybaraclaw.gateway.port.Port
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicReference
 
+import org.slf4j.LoggerFactory
+
 import scala.annotation.tailrec
 import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Answers TACIT's permission oracle for every session and records the users'
   * decisions. Agent code is never kept waiting: a request outside the granted
@@ -19,6 +22,7 @@ import scala.util.Try
 final class ApprovalBroker:
   import ApprovalBroker.*
 
+  private val logger = LoggerFactory.getLogger(classOf[ApprovalBroker])
   private val state = AtomicReference(BrokerState(Approvals.empty, Map.empty))
 
   /** Where the session's current turn came from: requests made by agent code
@@ -55,14 +59,29 @@ final class ApprovalBroker:
       case Outcome.Allowed                   => allow
       case Outcome.Rejected(message)         => deny(message)
       case Outcome.Asked(request, newPrompt) =>
-        newPrompt.foreach(turn =>
-          turn.port.requestApproval(sessionId, turn.origin, request)
-        )
-        deny(
-          s"${request.permission.describe.capitalize} needs the user's approval (permission request #${request.id}). " +
-            "The user has been asked. Stop and tell them you are waiting; " +
-            "you will get a message once they decide."
-        )
+        val asked = newPrompt.forall: turn =>
+          shown(request):
+            turn.port.requestApproval(sessionId, turn.origin, request)
+        if asked then
+          deny(
+            s"${request.permission.describe.capitalize} needs the user's approval (permission request #${request.id}). " +
+              "The user has been asked. Stop and tell them you are waiting; " +
+              "you will get a message once they decide."
+          )
+        else
+          update(s => (s.copy(approvals = s.approvals.cancel(request.id)), ()))
+          deny(
+            s"Denied ${request.permission.describe}: the user could not be asked."
+          )
+
+  private def shown(request: ApprovalRequest)(show: => Unit): Boolean =
+    try
+      show
+      true
+    catch
+      case NonFatal(e) =>
+        logger.warn(s"could not show permission request #${request.id}", e)
+        false
 
   private def update[A](f: BrokerState => (BrokerState, A)): A =
     @tailrec
@@ -193,11 +212,17 @@ object ApprovalBroker:
         "Access denied: wildcards are not allowed; request exact command names and host names."
       )
       .filterOrElse(
+        (permission, _) => permission.question().length <= MaxQuestionLength,
+        "Access denied: the request names too much to show the user at once; split it into smaller requests."
+      )
+      .filterOrElse(
         (_, reason) => reason.length <= MaxReasonLength,
         s"Access denied: keep the reason to at most $MaxReasonLength characters."
       )
 
   private val MaxReasonLength = 200
+
+  private val MaxQuestionLength = 2900
 
   /** `*` is a wildcard in TACIT's host matching, so it would grant far more
     * than the prompt shows; command names are exact executables. `?` is

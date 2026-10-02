@@ -33,7 +33,37 @@ class SlackBot(botToken: String, appToken: String) extends SlackApi:
   def getChannel(id: String): Channel = client.getChannel(id)
   def getUser(id: String): User = client.getUser(id)
 
+  def addReaction(channel: String, ts: String, name: String): Unit =
+    client.addReaction(channel, ts, name)
+
+  def removeReaction(channel: String, ts: String, name: String): Unit =
+    client.removeReaction(channel, ts, name)
+
+  def postApprovalPrompt(
+      channel: String,
+      threadTs: Option[String],
+      prompt: ApprovalPrompt
+  ): String =
+    client.postApprovalPrompt(channel, threadTs, prompt)
+
+  def closeApprovalPrompt(
+      channel: String,
+      ts: String,
+      prompt: ApprovalPrompt,
+      outcome: String
+  ): Unit =
+    client.closeApprovalPrompt(channel, ts, prompt, outcome)
+
+  def postEphemeral(
+      channel: String,
+      threadTs: Option[String],
+      userId: String,
+      text: String
+  ): Unit =
+    client.postEphemeral(channel, threadTs, userId, text)
+
   def messageChannel: ReadableChannel[Message] = client.messageChannel
+  def approvalClicks: ReadableChannel[ApprovalClick] = client.approvalClicks
   def shutdown(): Unit = client.shutdown()
 
 object SlackBot:

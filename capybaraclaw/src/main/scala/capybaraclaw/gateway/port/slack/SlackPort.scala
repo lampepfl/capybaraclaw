@@ -1,7 +1,11 @@
 package capybaraclaw.gateway.port.slack
 
 import capybaraclaw.gateway.{
+  ApprovalDecision,
+  ApprovalReply,
+  ApprovalRequest,
   GatewayMessage,
+  Inbound,
   Origin,
   PortId,
   SessionHandle,
@@ -12,6 +16,8 @@ import capybaraclaw.gateway.{
 import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import org.slf4j.LoggerFactory
+import java.util.concurrent.atomic.AtomicReference
+import scala.annotation.tailrec
 import scala.util.control.NonFatal
 
 /** Gateway Port backed by Slack Socket Mode.
@@ -31,13 +37,24 @@ class SlackPort(bot: SlackApi) extends Port:
   val id: PortId = SlackPort.Id
 
   private val logger = LoggerFactory.getLogger(classOf[SlackPort])
-  private val outCh = UnboundedChannel[GatewayMessage]()
+  private val outCh = UnboundedChannel[Inbound]()
 
-  def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
+  import SlackPort.{PendingPrompt, Reaction}
+
+  private val lastMessageTs = AtomicReference(Map.empty[String, String])
+
+  private val thinking = AtomicReference(Map.empty[String, Reaction])
+
+  private val prompts = AtomicReference(Map.empty[Int, PendingPrompt])
+
+  def incoming: ReadableChannel[Inbound] = outCh.asReadable
 
   /** Spawn a reader fiber that pumps Slack messages into the gateway channel. */
   def start()(using Async.Spawn): Future[Unit] =
-    Future(readLoop())
+    val clicks = Future(clickLoop())
+    Future:
+      readLoop()
+      clicks.awaitResult
 
   private def readLoop()(using Async.Spawn): Unit =
     var running = true
@@ -47,6 +64,7 @@ class SlackPort(bot: SlackApi) extends Port:
           val origin = toOrigin(slackMsg)
           val handle = getSlackHandle(origin)
           logIncomingMessage(handle, origin.user, slackMsg.text)
+          lastMessageTs.updateAndGet(_.updated(handle.value, slackMsg.ts))
           outCh.sendImmediately(GatewayMessage(origin, slackMsg.text))
         case Left(_) =>
           running = false
@@ -78,6 +96,7 @@ class SlackPort(bot: SlackApi) extends Port:
   override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
     val handle = getSlackHandle(origin)
     val (channelId, threadTs) = decodeHandle(handle)
+    startThinking(handle, channelId)
 
     import SlackPort.StreamState
     import SlackPort.StreamState.*
@@ -173,6 +192,115 @@ class SlackPort(bot: SlackApi) extends Port:
     new SlackReply(NotStarted)
   end openReply
 
+  override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
+    val handle = getSlackHandle(origin)
+    thinking
+      .getAndUpdate(_ - handle.value)
+      .get(handle.value)
+      .foreach: reaction =>
+        bestEffort(s"removing reaction for ${handle.value}"):
+          bot.removeReaction(
+            reaction.channel,
+            reaction.ts,
+            SlackPort.ThinkingReaction
+          )
+
+  override def supportsApprovals: Boolean = true
+
+  override def requestApproval(
+      sessionId: SessionId,
+      origin: Origin,
+      request: ApprovalRequest
+  ): Unit =
+    val handle = getSlackHandle(origin)
+    val (channelId, threadTs) = decodeHandle(handle)
+    val prompt = ApprovalPrompt(
+      request.id,
+      request.permission.question(),
+      request.reasonLine
+    )
+    val ts = bot.postApprovalPrompt(channelId, threadTs, prompt)
+    val _ = prompts.updateAndGet(
+      _.updated(
+        request.id,
+        PendingPrompt(channelId, ts, threadTs, prompt, origin)
+      )
+    )
+
+  @tailrec
+  private def clickLoop()(using Async): Unit =
+    bot.approvalClicks.read() match
+      case Right(click) =>
+        bestEffort(s"approval click on #${click.requestId}"):
+          handleClick(click)
+        clickLoop()
+      case Left(_) => ()
+
+  private def handleClick(click: ApprovalClick): Unit =
+    prompts.get().get(click.requestId) match
+      case Some(pending)
+          if pending.channel != click.channel || pending.ts != click.messageTs =>
+        bot.postEphemeral(
+          click.channel,
+          click.threadTs,
+          click.userId,
+          "This permission request is no longer pending."
+        )
+      case None =>
+        bot.postEphemeral(
+          click.channel,
+          click.threadTs,
+          click.userId,
+          s"Permission request #${click.requestId} is no longer pending."
+        )
+      case Some(pending) if pending.origin.user != UserId(click.userId) =>
+        bot.postEphemeral(
+          pending.channel,
+          pending.threadTs,
+          click.userId,
+          s"Only <@${pending.origin.user}> can answer permission request #${click.requestId}."
+        )
+      case Some(pending) =>
+        val claimed =
+          prompts.getAndUpdate(_ - click.requestId).contains(click.requestId)
+        if claimed then
+          val outcome = click.decision match
+            case ApprovalDecision.Approve =>
+              s":white_check_mark: Allowed for this session by <@${click.userId}>"
+            case ApprovalDecision.Deny =>
+              s":no_entry: Denied by <@${click.userId}>"
+          bestEffort(s"closing prompt #${click.requestId}"):
+            bot.closeApprovalPrompt(
+              pending.channel,
+              pending.ts,
+              pending.prompt,
+              outcome
+            )
+          val _ = lastMessageTs.updateAndGet(
+            _.updated(getSlackHandle(pending.origin).value, pending.ts)
+          )
+          outCh.sendImmediately(
+            ApprovalReply(pending.origin, Some(click.requestId), click.decision)
+          )
+
+  private def startThinking(handle: SessionHandle, channelId: String): Unit =
+    lastMessageTs
+      .getAndUpdate(_ - handle.value)
+      .get(handle.value)
+      .foreach: ts =>
+        try
+          bot.addReaction(channelId, ts, SlackPort.ThinkingReaction)
+          val _ = thinking.updateAndGet(
+            _.updated(handle.value, Reaction(channelId, ts))
+          )
+        catch
+          case NonFatal(e) =>
+            logger.warn("[slack] failed to add thinking reaction", e)
+
+  private def bestEffort(what: String)(action: => Unit): Unit =
+    try action
+    catch case NonFatal(e) => logger.warn(s"[slack] failed: $what", e)
+
   def shutdown(): Unit =
     try outCh.close()
     catch case NonFatal(_) => ()
@@ -264,6 +392,18 @@ object SlackPort:
     case NotStarted
     case Streaming(ts: String)
     case Abandoned(ts: Option[String])
+
+  val ThinkingReaction = "eyes"
+
+  private final case class Reaction(channel: String, ts: String)
+
+  private final case class PendingPrompt(
+      channel: String,
+      ts: String,
+      threadTs: Option[String],
+      prompt: ApprovalPrompt,
+      origin: Origin
+  )
 
   def handleValue(
       channelId: String,
