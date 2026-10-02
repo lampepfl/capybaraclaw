@@ -116,13 +116,14 @@ private object ClawMain extends CaseApp[CliOptions]:
             ports,
             contextProvider,
             memory,
-            clawFactory = (wd, sid, hist, access) =>
+            clawFactory = (wd, sid, hist, access, oracle) =>
               ClawAgent(
                 wd,
                 sid,
                 contextProvider,
                 initialMessages = hist,
-                memory = access
+                memory = access,
+                permissionOracle = Some(oracle)
               )
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")

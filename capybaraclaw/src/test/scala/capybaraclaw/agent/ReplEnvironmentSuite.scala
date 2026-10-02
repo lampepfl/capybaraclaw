@@ -62,6 +62,83 @@ class ReplEnvironmentSuite extends munit.FunSuite:
       assert(!Files.exists(dir.resolve("claw.json")))
     finally deleteRecursively(dir)
 
+  workDir.test("file access is bounded to the working directory"): dir =>
+    val outside = Files.createTempDirectory("claw-outside").toRealPath()
+    try
+      val env = ReplEnvironment(dir.toString, Nil)
+      val inside = env.repl.execute(existsCode(dir.toRealPath()))
+      assert(inside.output.contains("true"), inside.output)
+      val denied = env.repl.execute(existsCode(outside))
+      assert(
+        denied.output.contains("not within any allowed root"),
+        denied.output
+      )
+    finally deleteRecursively(outside)
+
+  workDir.test("requests outside the working directory ask the oracle"): dir =>
+    val outside = Files.createTempDirectory("claw-outside").toRealPath()
+    try
+      val asked = java.util.concurrent.ConcurrentLinkedQueue[String]()
+      val oracle: String => String = request =>
+        asked.add(request)
+        ujson.write(
+          ujson.Obj("allow" -> false, "message" -> "waiting for approval #1")
+        )
+      val env = ReplEnvironment(dir.toString, Nil, Some(oracle))
+      val result = env.repl.execute(existsCode(outside))
+      assert(result.output.contains("waiting for approval #1"), result.output)
+      assertEquals(asked.size, 1)
+      assertEquals(
+        ujson.read(asked.peek()).obj("resolved").str,
+        outside.toString
+      )
+    finally deleteRecursively(outside)
+
+  workDir.test("after the user approves, the same request succeeds"): dir =>
+    import capybaraclaw.gateway.*
+    import capybaraclaw.gateway.port.slack.SlackPort
+    val outside = Files.createTempDirectory("claw-outside").toRealPath()
+    try
+      val sessionId = SessionId.random()
+      val broker = ApprovalBroker()
+      broker.beginTurn(
+        sessionId,
+        FakePort(SlackPort.Id, supportsApprovals = true),
+        Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
+      )
+      val env =
+        ReplEnvironment(dir.toString, Nil, Some(broker.oracle(sessionId)))
+      val denied = env.repl.execute(existsCode(outside))
+      assert(denied.output.contains("permission request #1"), denied.output)
+      assert(
+        broker.resolve(sessionId, Some(1), ApprovalDecision.Approve).isRight
+      )
+      val granted = env.repl.execute(existsCode(outside))
+      assert(granted.output.contains("true"), granted.output)
+    finally deleteRecursively(outside)
+
+  workDir.test("commands are blocked by default and run once approved"): dir =>
+    import capybaraclaw.gateway.*
+    import capybaraclaw.gateway.port.slack.SlackPort
+    val sessionId = SessionId.random()
+    val broker = ApprovalBroker()
+    broker.beginTurn(
+      sessionId,
+      FakePort(SlackPort.Id, supportsApprovals = true),
+      Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
+    )
+    val env = ReplEnvironment(dir.toString, Nil, Some(broker.oracle(sessionId)))
+    val code =
+      """requestExecPermission(Set("echo")) { execOutput("echo", List("ran")) }"""
+    val denied = env.repl.execute(code)
+    assert(denied.output.contains("permission request #1"), denied.output)
+    assert(broker.resolve(sessionId, Some(1), ApprovalDecision.Approve).isRight)
+    val ran = env.repl.execute(code)
+    assert(ran.output.contains("ran"), ran.output)
+
+  private def existsCode(path: Path): String =
+    s"""requestFileSystem("$path") { access("$path").exists }"""
+
   private def deleteRecursively(path: Path): Unit =
     if Files.exists(path) then
       val stream = Files.walk(path)

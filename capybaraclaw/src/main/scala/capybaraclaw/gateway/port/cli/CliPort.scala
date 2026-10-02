@@ -2,9 +2,12 @@ package capybaraclaw.gateway.port.cli
 
 import capybaraclaw.agent.{AgentConfig, MemoryAccess}
 import capybaraclaw.gateway.{
+  ApprovalDecision,
+  ApprovalRequest,
+  Permission,
   ContextProvider,
   Conversation,
-  GatewayMessage,
+  Inbound,
   Origin,
   PortId,
   SessionId,
@@ -29,6 +32,7 @@ import java.time.format.DateTimeFormatter
 import java.util.List as JList
 
 import scala.annotation.tailrec
+import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 import scala.util.{Random, Success, Try}
 
@@ -40,9 +44,15 @@ import org.jline.reader.{
   LineReaderBuilder,
   UserInterruptException
 }
+import org.jline.prompt.{PrompterConfig, PrompterFactory, ToggleResult}
 import org.jline.reader.impl.completer.StringsCompleter
 import org.jline.terminal.{Attributes, Terminal, TerminalBuilder}
-import org.jline.utils.{AttributedStringBuilder, AttributedStyle, Status}
+import org.jline.utils.{
+  AttributedString,
+  AttributedStringBuilder,
+  AttributedStyle,
+  Status
+}
 
 import tacit.agents.llm.endpoint.Role as MessageRole
 
@@ -59,9 +69,9 @@ class CliPort(
   import CliTransitions.*
   import SessionFormatting.*
 
-  private val outCh = UnboundedChannel[GatewayMessage]()
+  private val outCh = UnboundedChannel[Inbound]()
   private val events = UnboundedChannel[CliEvent]()
-  private val inputReadPermits = UnboundedChannel[Unit]()
+  private val inputReadPermits = UnboundedChannel[InputRequest]()
   private val shutdownPromise: Future.Promise[Unit] = Future.Promise[Unit]()
   private val agentConfig =
     AgentConfig.load(workDirFile.getPath, memory.snapshot())
@@ -71,6 +81,7 @@ class CliPort(
   private val reader: LineReader = buildReader(terminal)
   private val status: Option[Status] =
     if terminalOwnsStdio then None else Option(Status.getStatus(terminal, true))
+  private val menusSupported: Boolean = !terminalOwnsStdio
 
   private val sessionStartMillis = System.currentTimeMillis()
 
@@ -89,7 +100,7 @@ class CliPort(
   private var streamFirstLine = true
   private val streamBuffer = StringBuilder()
 
-  def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
+  def incoming: ReadableChannel[Inbound] = outCh.asReadable
 
   def start()(using Async.Spawn): Future[Unit] =
     Future:
@@ -99,7 +110,7 @@ class CliPort(
           println("")
           renderStatus("")
         printHeader()
-        offerInputReadPermit()
+        offerInputReadPermit(InputRequest.ReadLine)
         val _ = Future(readInputLoop())
         val finalState =
           Async.group:
@@ -128,6 +139,15 @@ class CliPort(
   ): Unit =
     offerEvent(ToolCall(toolName, args))
 
+  override def supportsApprovals: Boolean = true
+
+  override def requestApproval(
+      sessionId: SessionId,
+      origin: Origin,
+      request: ApprovalRequest
+  ): Unit =
+    offerEvent(ApprovalRequested(request))
+
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
@@ -146,16 +166,10 @@ class CliPort(
     @tailrec
     def loop(): Unit =
       inputReadPermits.read() match
-        case Right(_) =>
-          val event =
-            try
-              Option(reader.readLine(userPrompt)) match
-                case Some(line) => UserInput(line)
-                case None       => InputClosed
-            catch
-              case _: EndOfFileException     => InputClosed
-              case _: UserInterruptException => UserInput("")
-              case NonFatal(error)           => InputReadFailed(error)
+        case Right(request) =>
+          val event = request match
+            case InputRequest.ReadLine              => readUserInput()
+            case InputRequest.AskApproval(approval) => askApproval(approval)
           val shouldContinue = offerEvent(event) && event != InputClosed
           if shouldContinue then
             event match
@@ -165,6 +179,55 @@ class CliPort(
         case Left(_) =>
           ()
     loop()
+
+  private def readUserInput(): CliEvent =
+    try
+      Option(reader.readLine(userPrompt)) match
+        case Some(line) => UserInput(line)
+        case None       => InputClosed
+    catch
+      case _: EndOfFileException     => InputClosed
+      case _: UserInterruptException => UserInput("")
+      case NonFatal(error)           => InputReadFailed(error)
+
+  /** Yes/No toggle for a permission request, switched with the arrow keys
+    * or Tab; other keys are ignored. It starts on "No", so a stray Enter
+    * refuses. Escape or Ctrl-C postpones it: `/approve` and `/deny` still
+    * answer it later.
+    */
+  private def askApproval(request: ApprovalRequest): CliEvent =
+    try
+      val prompter =
+        PrompterFactory.create(reader, terminal, PrompterConfig.defaults())
+      val builder = prompter.newBuilder()
+      builder
+        .createTogglePrompt()
+        .name(ApprovalPromptName)
+        .message(question(request.permission))
+        .activeLabel("Yes, for this session")
+        .inactiveLabel("No")
+        .defaultValue(false)
+        .addPrompt()
+      val title = AttributedStringBuilder()
+        .style(permissionStyle.bold)
+        .append(s"⚠ Permission request #${request.id}")
+        .toAttributedString
+      val reason = reasonLine(request).map: line =>
+        AttributedStringBuilder()
+          .style(AttributedStyle.DEFAULT.faint)
+          .append(s"  $line")
+          .toAttributedString
+      val header = (title :: reason).asJava
+      discardTypeahead()
+      val choice = Option(prompter.prompt(header, builder.build()))
+        .flatMap(results => Option(results.get(ApprovalPromptName)))
+        .collect:
+          case result: ToggleResult => result.isActive
+      choice match
+        case Some(true)  => ApprovalChosen(request, ApprovalDecision.Approve)
+        case Some(false) => ApprovalChosen(request, ApprovalDecision.Deny)
+        case None        => ApprovalPostponed(request)
+    catch case NonFatal(_) => ApprovalPostponed(request)
 
   private def runSpinner()(using Async): Unit =
     while true do
@@ -196,7 +259,8 @@ class CliPort(
               port = id,
               user = user,
               session = SessionRef.Direct(sessionId)
-            )
+            ),
+            menusSupported = menusSupported
           )
           val result = transition(rs.state, ev, ctx)
           applyEffects(rs.copy(state = result.state), result.effects)
@@ -256,6 +320,17 @@ class CliPort(
           rs
         case RenderHintStatus(text) =>
           renderStatus(text)
+          rs
+        case RenderApprovalRequest(request) =>
+          renderEntry(
+            Role.Permission,
+            (List(s"#${request.id} ${question(request.permission)}") ++
+              reasonLine(request) ++
+              List(
+                s"Answer with /approve ${request.id} or /deny ${request.id}."
+              ))
+              .mkString("\n")
+          )
           rs
 
   private def renderSpinner(spinner: SpinnerState, now: Long): Unit =
@@ -319,6 +394,40 @@ class CliPort(
     val current = box()(layout(rows*)).border(Border.Round)
     reader.printAbove(current.render + "\n")
 
+  /** Keys typed while the turn ran stay buffered (only echo is off). A stray
+    * Enter among them must not answer a prompt the user has not seen yet.
+    */
+  @tailrec
+  private def discardTypeahead(): Unit =
+    if terminal.reader().read(TypeaheadPollMs) >= 0 then discardTypeahead()
+
+  private def reasonLine(request: ApprovalRequest): List[String] =
+    val who = request.permission match
+      case Permission.Plugin(_, _, _) => "the plugin's"
+      case _                          => "capybara's"
+    Option
+      .when(request.reason.nonEmpty)(
+        s"$who reason: ${Permission.quote(request.reason)}"
+      )
+      .toList
+
+  private def question(permission: Permission): String =
+    permission match
+      case Permission.Files(root, Permission.FileAccess.Read) =>
+        s"Allow capybara to read ${Permission.quote(tildify(root))}?"
+      case Permission.Files(root, Permission.FileAccess.ReadWrite) =>
+        s"Allow capybara to read and write ${Permission.quote(tildify(root))}?"
+      case Permission.Commands(names) =>
+        s"Allow capybara to run ${Permission.quoteAll(names)}?"
+      case Permission.Hosts(hosts, Permission.NetworkAccess.Fetch) =>
+        s"Allow capybara to fetch from ${Permission.quoteAll(hosts)} (GET and HEAD only)?"
+      case Permission.Hosts(hosts, Permission.NetworkAccess.Send) =>
+        s"Allow capybara to send data to ${Permission.quoteAll(hosts)}?"
+      case Permission.Plugin(plugin, name, items) =>
+        val forItems =
+          if items.isEmpty then "" else s" for ${Permission.quoteAll(items)}"
+        s"Allow plugin ${Permission.quote(plugin)} to ${Permission.quote(name)}$forItems?"
+
   private def printHeader(): Unit =
     val snap = agentConfig.memorySnapshot
     val header = box()(
@@ -377,6 +486,8 @@ class CliPort(
           "⚙ tool",
           AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW)
         )
+      case Role.Permission =>
+        ("⚠ permission", permissionStyle)
 
     val lines = prepareEntryLines(text)
     val builder = AttributedStringBuilder()
@@ -405,6 +516,9 @@ class CliPort(
       .style(AttributedStyle.DEFAULT.faint)
       .append(s"${LocalTime.now.format(TimeFormatter)} ")
 
+  private def permissionStyle: AttributedStyle =
+    AttributedStyle.DEFAULT.foreground(AttributedStyle.MAGENTA)
+
   private def userStyle: AttributedStyle =
     AttributedStyle.DEFAULT.foreground(AttributedStyle.BLUE)
 
@@ -427,10 +541,10 @@ class CliPort(
     catch case _: ChannelClosedException => false
 
   private def offerInputReadPermitIfReady(state: State): Unit =
-    if state.running && !state.turnInFlight then offerInputReadPermit()
+    nextInput(state, menusSupported).foreach(offerInputReadPermit)
 
-  private def offerInputReadPermit(): Unit =
-    try inputReadPermits.sendImmediately(())
+  private def offerInputReadPermit(request: InputRequest): Unit =
+    try inputReadPermits.sendImmediately(request)
     catch case _: ChannelClosedException => ()
 
   private def setEcho(enabled: Boolean): Unit =
@@ -460,6 +574,9 @@ object CliPort:
   def defaultUser: UserId = UserId(sys.env.getOrElse("USER", "cli"))
   val SpinnerIntervalMs: Long = 100L
   val InputReadFailureBackoffMs: Long = 500L
+
+  private val ApprovalPromptName = "decision"
+  private val TypeaheadPollMs = 1L
 
   val TimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm")

@@ -63,3 +63,31 @@ class CliCommandsSuite extends FunSuite:
     assertEquals(CliCommands.commandStatus("hello"), CommandStatus.Plain)
     assertEquals(CliCommands.commandStatus(""), CommandStatus.Plain)
     assertEquals(CliCommands.commandStatus("quit"), CommandStatus.Plain)
+
+  test("parseApproval: approve or deny, with an optional request number"):
+    import CliCommands.ApprovalCommand
+    import capybaraclaw.gateway.ApprovalDecision.*
+    assertEquals(
+      CliCommands.parseApproval("/approve"),
+      Some(Right(ApprovalCommand(None, Approve)))
+    )
+    assertEquals(
+      CliCommands.parseApproval("  /APPROVE 3 "),
+      Some(Right(ApprovalCommand(Some(3), Approve)))
+    )
+    assertEquals(
+      CliCommands.parseApproval("/deny #12"),
+      Some(Right(ApprovalCommand(Some(12), Deny)))
+    )
+    assert(CliCommands.parseApproval("/approve 0").exists(_.isLeft))
+    assert(CliCommands.parseApproval("/deny 1 2").exists(_.isLeft))
+    assertEquals(CliCommands.parseApproval("/approved"), None)
+    assertEquals(CliCommands.parseApproval("approve 3"), None)
+
+  test("commandStatus: approval commands with a request number are known"):
+    assertEquals(CliCommands.commandStatus("/approve 3"), CommandStatus.Known)
+    assertEquals(CliCommands.commandStatus("/deny"), CommandStatus.Known)
+    assertEquals(
+      CliCommands.commandStatus("/sessions 3"),
+      CommandStatus.Unknown
+    )
