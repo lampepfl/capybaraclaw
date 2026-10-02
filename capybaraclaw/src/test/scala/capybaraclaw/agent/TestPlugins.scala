@@ -21,7 +21,9 @@ object TestPlugins:
       "preamble.scala" -> preamble,
       "api-docs.md" -> "demo docs"
     )
-    val out = JarOutputStream(Files.newOutputStream(pluginsDir.resolve(jarName)))
+    val out = JarOutputStream(
+      Files.newOutputStream(pluginsDir.resolve(jarName))
+    )
     try
       entries.foreach: (name, content) =>
         out.putNextEntry(JarEntry(name))
