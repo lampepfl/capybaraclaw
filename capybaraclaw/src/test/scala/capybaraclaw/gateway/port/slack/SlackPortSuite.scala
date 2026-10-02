@@ -1,7 +1,12 @@
 package capybaraclaw.gateway.port.slack
 
 import capybaraclaw.gateway.{
+  ApprovalDecision,
+  ApprovalReply,
+  ApprovalRequest,
   Conversation,
+  GatewayMessage,
+  Permission,
   Origin,
   PortId,
   SessionHandle,
@@ -9,7 +14,7 @@ import capybaraclaw.gateway.{
   SessionRef,
   UserId
 }
-import gears.async.{Async, ReadableChannel, UnboundedChannel}
+import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import gears.async.default.given
 import scala.collection.mutable.ListBuffer
 
@@ -18,7 +23,7 @@ class SlackPortSuite extends munit.FunSuite:
   private def receive(bot: FakeSlackApi, port: SlackPort, msg: Message) =
     Async.blocking:
       port.start()
-      bot.deliver(msg)
+      bot.push(msg)
       val origin = port.incoming.read().toOption.get.origin
       bot.shutdown()
       origin
@@ -303,6 +308,248 @@ class SlackPortSuite extends munit.FunSuite:
   test("handleValue: falls back to channel-only when ts is missing"):
     assertEquals(SlackPort.handleValue("C1", None, ""), "C1")
 
+  private val sessionId = SessionId.random()
+
+  test(
+    "a message opening a channel thread gets a reaction, removed after the turn"
+  ):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    Async.blocking:
+      val _ = port.start()
+      bot.push(
+        Message("U1", "hi", "1.1", None, MessageOrigin.ChannelMessage("C123"))
+      )
+      val GatewayMessage(origin, _) =
+        port.incoming.read().toOption.get: @unchecked
+
+      val _ = port.openReply(sessionId, origin)
+      port.onTurnFinished(sessionId, origin)
+
+      assertEquals(
+        bot.calls.toList,
+        List(
+          s"react C123 1.1 ${SlackPort.ThinkingReaction}",
+          s"unreact C123 1.1 ${SlackPort.ThinkingReaction}"
+        )
+      )
+      port.shutdown()
+
+  test(
+    "a message in an existing channel thread gets a reaction"
+  ):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    Async.blocking:
+      val _ = port.start()
+      bot.push(
+        Message(
+          "U1",
+          "hi",
+          "2.2",
+          Some("1.1"),
+          MessageOrigin.ChannelMessage("C123")
+        )
+      )
+      val GatewayMessage(origin, _) =
+        port.incoming.read().toOption.get: @unchecked
+
+      val _ = port.openReply(sessionId, origin)
+      port.onTurnFinished(sessionId, origin)
+
+      assertEquals(
+        bot.calls.toList,
+        List(
+          s"react C123 2.2 ${SlackPort.ThinkingReaction}",
+          s"unreact C123 2.2 ${SlackPort.ThinkingReaction}"
+        )
+      )
+      port.shutdown()
+
+  private val request = ApprovalRequest(
+    7,
+    sessionId,
+    Permission.Commands(Set("git")),
+    "to show the log"
+  )
+
+  test(
+    "a permission request is posted in the thread with its question and reason"
+  ):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+
+    port.requestApproval(sessionId, origin, request)
+
+    assertEquals(
+      bot.prompts.toList,
+      List(
+        (
+          "C123",
+          Some("1.1"),
+          ApprovalPrompt(
+            7,
+            Permission.Commands(Set("git")).question(),
+            Some("capybara's reason: \"to show the log\"")
+          )
+        )
+      )
+    )
+
+  test("the requester's click answers the request and closes the prompt"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+
+      assertEquals(
+        port.incoming.read().toOption,
+        Some(ApprovalReply(origin, Some(7), ApprovalDecision.Approve))
+      )
+      assertEquals(
+        bot.closed.toList,
+        List(
+          ("prompt-7", ":white_check_mark: Allowed for this session by <@U1>")
+        )
+      )
+      port.shutdown()
+
+  test("someone else's click is refused privately and answers nothing"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U2",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Deny
+        )
+      )
+
+      assertEquals(
+        port.incoming.read().toOption,
+        Some(ApprovalReply(origin, Some(7), ApprovalDecision.Deny)),
+        "only the requester's later click reaches the gateway"
+      )
+      assertEquals(
+        bot.ephemerals.toList,
+        List(("U2", "Only <@U1> can answer permission request #7."))
+      )
+      port.shutdown()
+
+  test("a DM message gets a reaction"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    Async.blocking:
+      val _ = port.start()
+      bot.push(
+        Message("U1", "hi", "1.1", None, MessageOrigin.DirectMessage("D123"))
+      )
+      val GatewayMessage(origin, _) =
+        port.incoming.read().toOption.get: @unchecked
+      val _ = port.openReply(sessionId, origin)
+      assertEquals(
+        bot.calls.toList,
+        List(s"react D123 1.1 ${SlackPort.ThinkingReaction}")
+      )
+      port.shutdown()
+
+  test(
+    "a click on an old prompt does not answer a newer request with the same id"
+  ):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C999",
+          "old-prompt",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Deny
+        )
+      )
+
+      assertEquals(
+        port.incoming.read().toOption,
+        Some(ApprovalReply(origin, Some(7), ApprovalDecision.Deny))
+      )
+      assertEquals(
+        bot.ephemerals.toList,
+        List(("U1", "This permission request is no longer pending."))
+      )
+      port.shutdown()
+
+  test(
+    "the turn an answered prompt starts reacts to the prompt"
+  ):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "D123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "D123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+      val _ = port.incoming.read()
+      val _ = port.openReply(sessionId, origin)
+      assertEquals(
+        bot.calls.toList,
+        List(s"react D123 prompt-7 ${SlackPort.ThinkingReaction}")
+      )
+      port.shutdown()
+
   private def slackOrigin(handle: SessionHandle): Origin =
     Origin(
       port = SlackPort.Id,
@@ -337,6 +584,15 @@ private final class FakeSlackApi(
   private val startedStreams = ListBuffer.empty[Started]
   private val appendedChunks = ListBuffer.empty[Appended]
   private val stoppedStreams = ListBuffer.empty[Stopped]
+  private val clicks = UnboundedChannel[ApprovalClick]()
+  val calls: ListBuffer[String] = ListBuffer.empty
+  val prompts: ListBuffer[(String, Option[String], ApprovalPrompt)] =
+    ListBuffer.empty
+  val closed: ListBuffer[(String, String)] = ListBuffer.empty
+  val ephemerals: ListBuffer[(String, String)] = ListBuffer.empty
+
+  def click(click: ApprovalClick): Unit = clicks.sendImmediately(click)
+  def push(message: Message): Unit = messages.sendImmediately(message)
 
   def sent: Seq[Sent] = sentMessages.toList
   def started: Seq[Started] = startedStreams.toList
@@ -377,11 +633,42 @@ private final class FakeSlackApi(
   def getUser(id: String): User =
     User(id, id, id, id)
 
+  def addReaction(channel: String, ts: String, name: String): Unit =
+    calls += s"react $channel $ts $name"
+
+  def removeReaction(channel: String, ts: String, name: String): Unit =
+    calls += s"unreact $channel $ts $name"
+
+  def postApprovalPrompt(
+      channel: String,
+      threadTs: Option[String],
+      prompt: ApprovalPrompt
+  ): String =
+    prompts += ((channel, threadTs, prompt))
+    s"prompt-${prompt.requestId}"
+
+  def closeApprovalPrompt(
+      channel: String,
+      ts: String,
+      prompt: ApprovalPrompt,
+      outcome: String
+  ): Unit =
+    closed += ((ts, outcome))
+
+  def postEphemeral(
+      channel: String,
+      threadTs: Option[String],
+      userId: String,
+      text: String
+  ): Unit =
+    ephemerals += ((userId, text))
+
   def messageChannel: ReadableChannel[Message] = messages.asReadable
+  def approvalClicks: ReadableChannel[ApprovalClick] = clicks.asReadable
 
-  def deliver(msg: Message): Unit = messages.sendImmediately(msg)
-
-  def shutdown(): Unit = messages.close()
+  def shutdown(): Unit =
+    messages.close()
+    clicks.close()
 
 private final class FailingSlackApi extends SlackApi:
   private val messages = UnboundedChannel[Message]()
@@ -415,6 +702,39 @@ private final class FailingSlackApi extends SlackApi:
   def getUser(id: String): User =
     User(id, id, id, id)
 
-  def messageChannel: ReadableChannel[Message] = messages.asReadable
+  def addReaction(channel: String, ts: String, name: String): Unit =
+    throw new RuntimeException(s"slack api is down: $channel")
 
-  def shutdown(): Unit = messages.close()
+  def removeReaction(channel: String, ts: String, name: String): Unit =
+    throw new RuntimeException(s"slack api is down: $channel")
+
+  def postApprovalPrompt(
+      channel: String,
+      threadTs: Option[String],
+      prompt: ApprovalPrompt
+  ): String =
+    throw new RuntimeException(s"slack api is down: $channel")
+
+  def closeApprovalPrompt(
+      channel: String,
+      ts: String,
+      prompt: ApprovalPrompt,
+      outcome: String
+  ): Unit =
+    throw new RuntimeException(s"slack api is down: $channel")
+
+  def postEphemeral(
+      channel: String,
+      threadTs: Option[String],
+      userId: String,
+      text: String
+  ): Unit =
+    throw new RuntimeException(s"slack api is down: $channel")
+
+  def messageChannel: ReadableChannel[Message] = messages.asReadable
+  private val clicks = UnboundedChannel[ApprovalClick]()
+  def approvalClicks: ReadableChannel[ApprovalClick] = clicks.asReadable
+
+  def shutdown(): Unit =
+    messages.close()
+    clicks.close()

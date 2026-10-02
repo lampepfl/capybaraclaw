@@ -203,7 +203,7 @@ class CliPort(
       builder
         .createTogglePrompt()
         .name(ApprovalPromptName)
-        .message(question(request.permission))
+        .message(request.permission.question(tildify(_)))
         .activeLabel("Yes, for this session")
         .inactiveLabel("No")
         .defaultValue(false)
@@ -212,7 +212,7 @@ class CliPort(
         .style(permissionStyle.bold)
         .append(s"⚠ Permission request #${request.id}")
         .toAttributedString
-      val reason = reasonLine(request).map: line =>
+      val reason = request.reasonLine.toList.map: line =>
         AttributedStringBuilder()
           .style(AttributedStyle.DEFAULT.faint)
           .append(s"  $line")
@@ -324,8 +324,10 @@ class CliPort(
         case RenderApprovalRequest(request) =>
           renderEntry(
             Role.Permission,
-            (List(s"#${request.id} ${question(request.permission)}") ++
-              reasonLine(request) ++
+            (List(
+              s"#${request.id} ${request.permission.question(tildify(_))}"
+            ) ++
+              request.reasonLine.toList ++
               List(
                 s"Answer with /approve ${request.id} or /deny ${request.id}."
               ))
@@ -400,35 +402,6 @@ class CliPort(
   @tailrec
   private def discardTypeahead(): Unit =
     if terminal.reader().read(TypeaheadPollMs) >= 0 then discardTypeahead()
-
-  private def reasonLine(request: ApprovalRequest): List[String] =
-    val who = request.permission match
-      case Permission.Plugin(_, _, _) => "the plugin's"
-      case _                          => "capybara's"
-    Option
-      .when(request.reason.nonEmpty)(
-        s"$who reason: ${Permission.quote(request.reason)}"
-      )
-      .toList
-
-  private def question(permission: Permission): String =
-    permission match
-      case Permission.Files(root, Permission.FileAccess.Read) =>
-        s"Allow capybara to read ${Permission.quote(tildify(root))}?"
-      case Permission.Files(root, Permission.FileAccess.ReadWrite) =>
-        s"Allow capybara to read and write ${Permission.quote(tildify(root))}?"
-      case Permission.Commands(names) =>
-        s"Allow capybara to run ${Permission.quoteAll(names)} with any arguments? " +
-          "Commands run outside the sandbox, as you: they can read and change " +
-          "any of your files and see the gateway's environment, API keys included."
-      case Permission.Hosts(hosts, Permission.NetworkAccess.Fetch) =>
-        s"Allow capybara to fetch from ${Permission.quoteAll(hosts)} (GET and HEAD only)?"
-      case Permission.Hosts(hosts, Permission.NetworkAccess.Send) =>
-        s"Allow capybara to send data to ${Permission.quoteAll(hosts)}?"
-      case Permission.Plugin(plugin, name, items) =>
-        val forItems =
-          if items.isEmpty then "" else s" for ${Permission.quoteAll(items)}"
-        s"Allow plugin ${Permission.quote(plugin)} to ${Permission.quote(name)}$forItems?"
 
   private def printHeader(): Unit =
     val snap = agentConfig.memorySnapshot

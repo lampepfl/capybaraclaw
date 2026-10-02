@@ -35,6 +35,24 @@ enum Permission:
         if items.isEmpty then "" else s" for ${Permission.quoteAll(items)}"
       s"plugin ${Permission.quote(plugin)} permission ${Permission.quote(permission)}$forItems"
 
+  def question(showPath: String => String = identity): String = this match
+    case Files(root, Permission.FileAccess.Read) =>
+      s"Allow capybara to read ${Permission.quote(showPath(root))}?"
+    case Files(root, Permission.FileAccess.ReadWrite) =>
+      s"Allow capybara to read and write ${Permission.quote(showPath(root))}?"
+    case Commands(names) =>
+      s"Allow capybara to run ${Permission.quoteAll(names)} with any arguments? " +
+        "Commands run outside the sandbox, as you: they can read and change " +
+        "any of your files and see the gateway's environment, API keys included."
+    case Hosts(hosts, Permission.NetworkAccess.Fetch) =>
+      s"Allow capybara to fetch from ${Permission.quoteAll(hosts)} (GET and HEAD only)?"
+    case Hosts(hosts, Permission.NetworkAccess.Send) =>
+      s"Allow capybara to send data to ${Permission.quoteAll(hosts)}?"
+    case Plugin(plugin, name, items) =>
+      val forItems =
+        if items.isEmpty then "" else s" for ${Permission.quoteAll(items)}"
+      s"Allow plugin ${Permission.quote(plugin)} to ${Permission.quote(name)}$forItems?"
+
 object Permission:
   /** `ReadWrite` covers `Read`. */
   enum FileAccess:
@@ -57,7 +75,12 @@ final case class ApprovalRequest(
     sessionId: SessionId,
     permission: Permission,
     reason: String = ""
-)
+):
+  def reasonLine: Option[String] =
+    val who = permission match
+      case Permission.Plugin(_, _, _) => "the plugin's"
+      case _                          => "capybara's"
+    Option.when(reason.nonEmpty)(s"$who reason: ${Permission.quote(reason)}")
 
 enum ApprovalDecision:
   case Approve, Deny
