@@ -2,6 +2,7 @@ package capybaraclaw
 
 import caseapp.*
 
+import capybaraclaw.agent.ConfigError
 import capybaraclaw.gateway.{Gateway, SessionId, SessionMetadata}
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.{CliPort, SessionFormatting}
@@ -31,6 +32,9 @@ import scala.util.control.NonFatal
       ()
     case ClawCaseAppExit(code) =>
       sys.exit(code)
+    case e: ConfigError =>
+      System.err.println(s"[claw] ${e.getMessage}")
+      sys.exit(1)
 
 @ProgName("claw")
 private final case class CliOptions(

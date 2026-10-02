@@ -43,7 +43,7 @@ class SystemPromptSuite extends munit.FunSuite:
     )
     val config = AgentConfig(
       workDir = dir.toString,
-      provider = "openrouter",
+      provider = Provider.OpenRouter,
       model = "test/model",
       classifiedPaths = List("secret/")
     )
