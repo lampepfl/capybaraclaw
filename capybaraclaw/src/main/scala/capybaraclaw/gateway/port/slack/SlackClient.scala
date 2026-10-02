@@ -4,10 +4,20 @@ import com.slack.api.Slack
 import com.slack.api.methods.{MethodsClient, SlackApiTextResponse}
 import com.slack.api.methods.request.chat.{
   ChatAppendStreamRequest,
+  ChatPostEphemeralRequest,
   ChatPostMessageRequest,
   ChatStartStreamRequest,
-  ChatStopStreamRequest
+  ChatStopStreamRequest,
+  ChatUpdateRequest
 }
+import com.slack.api.methods.request.reactions.{
+  ReactionsAddRequest,
+  ReactionsRemoveRequest
+}
+import com.slack.api.model.block.{Blocks, LayoutBlock}
+import com.slack.api.model.block.composition.BlockCompositions
+import com.slack.api.model.block.element.BlockElements
+import capybaraclaw.gateway.ApprovalDecision
 import com.slack.api.methods.request.conversations.{
   ConversationsHistoryRequest,
   ConversationsInfoRequest
@@ -216,6 +226,113 @@ class SlackClient(botToken: String, appToken: String):
     )
     ensureOk(response)
 
+  def addReaction(channel: String, ts: String, name: String): Unit =
+    val response = methods.reactionsAdd(
+      ReactionsAddRequest
+        .builder()
+        .channel(channel)
+        .timestamp(ts)
+        .name(name)
+        .build()
+    )
+    ensureOk(response, "reactions.add")
+
+  def removeReaction(channel: String, ts: String, name: String): Unit =
+    val response = methods.reactionsRemove(
+      ReactionsRemoveRequest
+        .builder()
+        .channel(channel)
+        .timestamp(ts)
+        .name(name)
+        .build()
+    )
+    ensureOk(response, "reactions.remove")
+
+  def postApprovalPrompt(
+      channel: String,
+      threadTs: Option[String],
+      prompt: ApprovalPrompt
+  ): String =
+    val buttons = Blocks.actions(a =>
+      a.elements(
+        java.util.List.of(
+          BlockElements.button(b =>
+            b.actionId(SlackClient.ApproveAction)
+              .text(BlockCompositions.plainText("Allow for this session"))
+              .value(prompt.requestId.toString)
+              .style("primary")
+          ),
+          BlockElements.button(b =>
+            b.actionId(SlackClient.DenyAction)
+              .text(BlockCompositions.plainText("Deny"))
+              .value(prompt.requestId.toString)
+              .style("danger")
+          )
+        )
+      )
+    )
+    val builder = ChatPostMessageRequest
+      .builder()
+      .channel(channel)
+      .blocks((promptBlocks(prompt) :+ buttons).asJava)
+      .text(SlackClient.escape(prompt.question))
+    threadTs.foreach(ts => builder.threadTs(ts))
+    val response = methods.chatPostMessage(builder.build())
+    ensureOk(response, "chat.postMessage")
+    response.getTs.nn
+
+  def closeApprovalPrompt(
+      channel: String,
+      ts: String,
+      prompt: ApprovalPrompt,
+      outcome: String
+  ): Unit =
+    val result = Blocks.context(c =>
+      c.elements(java.util.List.of(BlockCompositions.markdownText(outcome)))
+    )
+    val response = methods.chatUpdate(
+      ChatUpdateRequest
+        .builder()
+        .channel(channel)
+        .ts(ts)
+        .blocks((promptBlocks(prompt) :+ result).asJava)
+        .text(s"${SlackClient.escape(prompt.question)} $outcome")
+        .build()
+    )
+    ensureOk(response, "chat.update")
+
+  private def promptBlocks(prompt: ApprovalPrompt): List[LayoutBlock] =
+    List(
+      Blocks.header(h =>
+        h.text(
+          BlockCompositions.plainText(
+            s":warning: Permission request #${prompt.requestId}",
+            true
+          )
+        )
+      ),
+      Blocks.section(sec =>
+        sec.text(BlockCompositions.plainText(prompt.question))
+      )
+    ) ++ prompt.reason.map: reason =>
+      Blocks.context(c =>
+        c.elements(java.util.List.of(BlockCompositions.plainText(reason)))
+      )
+
+  def postEphemeral(
+      channel: String,
+      threadTs: Option[String],
+      userId: String,
+      text: String
+  ): Unit =
+    val builder = ChatPostEphemeralRequest
+      .builder()
+      .channel(channel)
+      .user(userId)
+      .text(text)
+    threadTs.foreach(ts => builder.threadTs(ts))
+    ensureOk(methods.chatPostEphemeral(builder.build()), "chat.postEphemeral")
+
   /** Read recent messages from a channel. */
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     val response = methods.conversationsHistory(
@@ -238,6 +355,7 @@ class SlackClient(botToken: String, appToken: String):
   // --- Socket Mode listener (starts immediately) ---
 
   private val incomingMessages = UnboundedChannel[Message]()
+  private val incomingClicks = UnboundedChannel[ApprovalClick]()
   private val socketModeApp: SocketModeApp =
     val appConfig = AppConfig
       .builder()
@@ -276,6 +394,40 @@ class SlackClient(botToken: String, appToken: String):
       }
     )
 
+    app.blockAction(
+      java.util.regex.Pattern.compile(
+        s"^(${SlackClient.ApproveAction}|${SlackClient.DenyAction})$$"
+      ),
+      (req, ctx) => {
+        val payload = req.getPayload.nn
+        val click =
+          for
+            action <- payload.getActions.nn.asScala.headOption
+            requestId <- Option(action.getValue).flatMap(_.toIntOption)
+            user <- Option(payload.getUser).map(_.getId)
+            channel <- Option(payload.getChannel).map(_.getId)
+            messageTs <- Option(payload.getContainer).map(_.getMessageTs)
+          yield ApprovalClick(
+            userId = user,
+            channel = channel,
+            messageTs = messageTs,
+            threadTs =
+              Option(payload.getContainer).flatMap(c => Option(c.getThreadTs)),
+            requestId = requestId,
+            decision =
+              if action.getActionId == SlackClient.ApproveAction then
+                ApprovalDecision.Approve
+              else ApprovalDecision.Deny
+          )
+        click.foreach: c =>
+          try incomingClicks.sendImmediately(c)
+          catch
+            case _: ChannelClosedException =>
+              logger.debug("Ignoring Slack approval click after shutdown")
+        ctx.ack()
+      }
+    )
+
     val sma = SocketModeApp(appToken, app)
     sma.startAsync()
     sma
@@ -283,12 +435,18 @@ class SlackClient(botToken: String, appToken: String):
   /** Channel of incoming messages. */
   def messageChannel: ReadableChannel[Message] = incomingMessages.asReadable
 
+  def approvalClicks: ReadableChannel[ApprovalClick] = incomingClicks.asReadable
+
   /** Shut down the Socket Mode connection. */
   def shutdown(): Unit =
     try incomingMessages.close()
     catch
       case NonFatal(e) =>
         logger.warn("Failed to close Slack incoming message channel", e)
+    try incomingClicks.close()
+    catch
+      case NonFatal(e) =>
+        logger.warn("Failed to close Slack approval click channel", e)
     try socketModeApp.stop()
     catch
       case NonFatal(e) =>
@@ -307,3 +465,10 @@ class SlackClient(botToken: String, appToken: String):
     )
     ensureOk(response, "users.info")
     User.fromSdkUser(response.getUser.nn)
+
+object SlackClient:
+  val ApproveAction = "approval_approve"
+  val DenyAction = "approval_deny"
+
+  def escape(text: String): String =
+    text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

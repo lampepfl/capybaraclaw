@@ -315,3 +315,26 @@ class ApprovalBrokerSuite extends munit.FunSuite:
       port.approvalRequests.poll().nn.permission,
       Permission.Plugin("demo", "read", Set.empty)
     )
+
+  test("a request the port fails to show is dropped and denied"):
+    val broker = ApprovalBroker()
+    val port = new FakePort(SlackPort.Id, supportsApprovals = true):
+      override def requestApproval(
+          sessionId: SessionId,
+          origin: Origin,
+          request: ApprovalRequest
+      ): Unit = throw RuntimeException("slack is down")
+    broker.beginTurn(sessionId, port, origin)
+    val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!allowed)
+    assert(message.exists(_.contains("could not be asked")), message)
+    assertEquals(
+      broker.resolve(sessionId, None, ApprovalDecision.Approve),
+      Left("No pending permission requests in this session.")
+    )
+
+  test("a request naming too much is denied without asking"):
+    val (broker, port) = askingBroker()
+    val many = (1 to 300).map(i => s"host-$i.example.com")
+    assert(!answer(broker.oracle(sessionId)(itemsRequest("network", many*)))._1)
+    assert(port.approvalRequests.isEmpty)
