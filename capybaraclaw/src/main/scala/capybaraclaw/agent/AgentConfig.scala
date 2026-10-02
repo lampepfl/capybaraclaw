@@ -11,31 +11,33 @@ final class ConfigError(message: String) extends RuntimeException(message)
 /** An LLM provider selectable via `provider` in `claw.json`. */
 enum Provider(
     val id: String,
-    val thinking: ThinkingMode,
+    val thinking: Option[ThinkingMode],
     endpoint: EndpointProvider
 ):
   case Anthropic
       extends Provider(
         "anthropic",
-        ThinkingMode.Budget(2048),
+        Some(ThinkingMode.Budget(2048)),
         AnthropicEndpoint
       )
   case OpenAI
       extends Provider(
         "openai",
-        ThinkingMode.Effort(EffortLevel.Medium),
+        Some(ThinkingMode.Effort(EffortLevel.Medium)),
         OpenAIEndpoint
       )
   case OpenRouter
       extends Provider(
         "openrouter",
-        ThinkingMode.Effort(EffortLevel.Medium),
+        Some(ThinkingMode.Effort(EffortLevel.Medium)),
         OpenRouterEndpoint
       )
   case Ollama
       extends Provider(
         "ollama",
-        ThinkingMode.Effort(EffortLevel.Medium),
+        // Ollama accepts the reasoning parameter without running reasoning,
+        // and it makes models write tool calls as text instead of calling them.
+        None,
         OllamaEndpoint
       )
 
@@ -54,12 +56,12 @@ case class AgentConfig(
     classifiedPaths: List[String] = Nil,
     memorySnapshot: MemorySnapshot = MemorySnapshot.empty
 ):
-  def toLLMConfig: LLMConfig =
+  def toLLMConfig(apiReference: String): LLMConfig =
     LLMConfig(
       model = model,
-      systemPrompt = Some(SystemPrompt.build(this)),
+      systemPrompt = Some(SystemPrompt.build(this, apiReference)),
       maxTokens = Some(maxTokens),
-      thinking = Some(provider.thinking)
+      thinking = provider.thinking
     )
 
 object AgentConfig:

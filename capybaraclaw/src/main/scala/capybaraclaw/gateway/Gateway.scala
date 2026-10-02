@@ -8,8 +8,21 @@ import org.slf4j.LoggerFactory
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
-/** A message handed to the Gateway by a Port. */
-case class GatewayMessage(origin: Origin, text: String)
+/** What a Port hands to the Gateway. */
+sealed trait Inbound:
+  def origin: Origin
+
+/** A message for the session's agent. */
+case class GatewayMessage(origin: Origin, text: String) extends Inbound
+
+/** A user's answer to a permission request; `requestId = None` answers the
+  * session's most recent one.
+  */
+case class ApprovalReply(
+    origin: Origin,
+    requestId: Option[Int],
+    decision: ApprovalDecision
+) extends Inbound
 
 /** Routes messages from N ports into per-session `AgentRunner`s.
   *
@@ -28,9 +41,17 @@ class Gateway(
     clawFactory: (
         String,
         SessionId,
-        List[tacit.agents.llm.endpoint.Message]
-    ) => ClawAgent = (wd, sid, hist) =>
-      ClawAgent(wd, sid, SessionSearch.empty, initialMessages = hist)
+        List[tacit.agents.llm.endpoint.Message],
+        String => String
+    ) => ClawAgent = (wd, sid, hist, oracle) =>
+      ClawAgent(
+        wd,
+        sid,
+        SessionSearch.empty,
+        initialMessages = hist,
+        permissionOracle = Some(oracle)
+      ),
+    approvals: ApprovalBroker = ApprovalBroker()
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
   private val portsById: Map[PortId, Port] = ports.map(p => p.id -> p).toMap
@@ -74,8 +95,13 @@ class Gateway(
             try
               port.validateOriginForReply(msg.origin)
               val sessionId = resolveSessionId(msg.origin)
-              val runner = getOrCreateRunner(sessionId)
-              runner.deliver(RoutedGatewayMessage(msg, port))
+              msg match
+                case m: GatewayMessage =>
+                  getOrCreateRunner(sessionId).deliver(
+                    RoutedGatewayMessage(m, port)
+                  )
+                case reply: ApprovalReply =>
+                  handleApprovalReply(port, sessionId, reply)
             catch
               case e: IllegalArgumentException =>
                 logger.warn(
@@ -100,12 +126,39 @@ class Gateway(
         case Some(r) => r
         case None    =>
           val history = contextProvider.load(sessionId)
-          val claw = clawFactory(workDir, sessionId, history)
+          val claw =
+            clawFactory(
+              workDir,
+              sessionId,
+              history,
+              approvals.oracle(sessionId)
+            )
           val runner =
-            AgentRunner(sessionId, claw, contextProvider)
+            AgentRunner(sessionId, claw, contextProvider, approvals)
           runner.start()
           runners.update(sessionId, runner)
           runner
+
+  /** Records the decision and tells the agent, so it retries (or gives up)
+    * without the user having to ask.
+    */
+  private def handleApprovalReply(
+      port: Port,
+      sessionId: SessionId,
+      reply: ApprovalReply
+  )(using Async.Spawn): Unit =
+    approvals.resolve(sessionId, reply.requestId, reply.decision) match
+      case Right(request) =>
+        val text = reply.decision match
+          case ApprovalDecision.Approve =>
+            s"I approved ${request.permission.describe} for this session (permission request #${request.id}). Retry what you were doing."
+          case ApprovalDecision.Deny =>
+            s"I denied ${request.permission.describe} (permission request #${request.id}). Do not retry it; continue without it or ask me what to do."
+        getOrCreateRunner(sessionId).deliver(
+          RoutedGatewayMessage(GatewayMessage(reply.origin, text), port)
+        )
+      case Left(error) =>
+        rejectInbound(port, reply.origin, error)
 
   private def resolveSessionId(origin: Origin): SessionId =
     origin.session match

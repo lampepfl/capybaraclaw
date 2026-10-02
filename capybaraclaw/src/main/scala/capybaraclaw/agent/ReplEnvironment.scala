@@ -9,20 +9,28 @@ import io.circe.syntax.*
 
 import scala.util.Try
 
-final class ReplEnvironment(workDir: String, classifiedPaths: List[String]):
+final class ReplEnvironment(
+    workDir: String,
+    classifiedPaths: List[String],
+    permissionOracle: Option[String => String] = None
+):
   val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
 
   private val context: TacitContext = TacitContext(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
       libraryConfig = Json.obj(
+        "allowedRoots" -> List(java.io.File(workDir).getCanonicalPath).asJson,
+        "commandPermissions" -> List.empty[String].asJson,
+        "networkPermissions" -> List.empty[String].asJson,
         "classifiedPaths" -> classifiedPaths
           .map(p => java.io.File(workDir, p).getCanonicalPath)
           .asJson
       )
     ),
     recorder = None,
-    plugins = loadedPlugins
+    plugins = loadedPlugins,
+    permissionOracle = permissionOracle
   )
 
   val coreInterface: String =

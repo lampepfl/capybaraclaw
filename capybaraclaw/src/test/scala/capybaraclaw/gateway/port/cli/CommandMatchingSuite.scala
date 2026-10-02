@@ -14,9 +14,9 @@ class CommandMatchingSuite extends FunSuite:
     "topMatches: bare slash returns prefix matches alphabetical"
   ):
     val r = topMatches("/", HintLimit)
-    val slashCommands = CliCommands.All.filter(_.startsWith("/"))
-    assertEquals(r.matches.toSet, slashCommands)
-    assertEquals(r.matches, r.matches.sorted)
+    val slashCommands = CliCommands.All.filter(_.startsWith("/")).toList.sorted
+    assertEquals(r.matches, slashCommands.take(HintLimit))
+    assertEquals(r.truncated, slashCommands.sizeIs > HintLimit)
 
   test("topMatches: hard cap honoured, truncated flag set"):
     val r = topMatches("/", limit = 2)
