@@ -18,7 +18,8 @@ Prioritize what reduces future user steering - the most valuable memory is one
 that prevents the user from having to correct or remind you again. User preferences
 and recurring corrections matter more than procedural task details.
 Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO
-state to memory. Specifically: do not record PR numbers, issue numbers, commit SHAs,
+state to memory; use the `session_search` tool to recall those from past transcripts.
+Specifically: do not record PR numbers, issue numbers, commit SHAs,
 'fixed bug X', 'submitted PR Y', 'Phase N done', file counts, or any artifact that
 will be stale in 7 days. If a fact will be stale in a week, it does not belong in memory.
 Write memories as declarative facts, not instructions to yourself. 'User prefers
@@ -33,6 +34,11 @@ holds person-level preferences (not project-specific), so it needs no project na
 
 When the user states a preference, corrects you, or you learn a durable fact about
 the environment or project, save it right away rather than waiting to be asked.
+
+When the user references something from a past conversation, or you suspect relevant
+cross-session context exists, use the `session_search` tool to recall it before asking
+them to repeat themselves. Memory holds durable facts; `session_search` retrieves the
+full transcripts of your past sessions (across all projects).
 
 When a file approaches its cap (~80%), consolidate by replacing or removing older entries.
 
