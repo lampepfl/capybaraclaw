@@ -1,7 +1,7 @@
 package capybaraclaw.agent
 
-import tacit.core.{Context as TacitContext, Config as TacitConfig}
-import tacit.executor.ReplSession
+import tacit.core.{Context as TacitContext, Config as TacitConfig, LoadedPlugin}
+import tacit.executor.{ManagedRepl, ReplSession}
 import tacit.library.Interface as TacitLibraryInterface
 
 import io.circe.Json
@@ -10,6 +10,8 @@ import io.circe.syntax.*
 import scala.util.Try
 
 final class ReplEnvironment(workDir: String, classifiedPaths: List[String]):
+  val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
+
   private val context: TacitContext = TacitContext(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
@@ -19,8 +21,17 @@ final class ReplEnvironment(workDir: String, classifiedPaths: List[String]):
           .asJson
       )
     ),
-    recorder = None
+    recorder = None,
+    plugins = loadedPlugins
   )
+
+  val coreInterface: String =
+    ManagedRepl
+      .readLibraryResource("Interface.scala.txt")(using context)
+      .getOrElse:
+        throw IllegalStateException(
+          "Interface.scala.txt missing from tacit-library JAR (build issue)"
+        )
 
   val repl: ReplSession = ReplSession.create(using context)
 
