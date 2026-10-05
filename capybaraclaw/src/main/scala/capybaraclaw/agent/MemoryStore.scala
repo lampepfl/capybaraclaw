@@ -301,8 +301,12 @@ final class MemoryStore(val baseDir: File):
       current: List[String],
       oldText: String
   ): Either[MemoryResult, Int] =
+    // An exact match wins, otherwise an entry that is a prefix of another
+    // (e.g. "likes Scala" vs "likes Scala 3") could never be targeted.
+    val exact = current.indexOf(oldText)
     val matches =
-      current.zipWithIndex.filter((entry, _) => entry.contains(oldText))
+      if exact >= 0 then List((oldText, exact))
+      else current.zipWithIndex.filter((entry, _) => entry.contains(oldText))
     matches match
       case Nil =>
         Left(failure(s"No entry matched '$oldText'."))

@@ -118,6 +118,24 @@ class MemorySuite extends munit.FunSuite:
     assertFailure(result)
     assert(result("error").str.contains("Multiple entries"), result.render())
 
+  test("an exact match wins over entries that merely contain old_text"):
+    val store = freshStore()
+    assertSuccess(store.add(MemoryFile.User, "User likes Scala"))
+    assertSuccess(store.add(MemoryFile.User, "User likes Scala 3"))
+    assertSuccess(
+      store.replace(MemoryFile.User, "User likes Scala", "User likes Kotlin")
+    )
+    assertEquals(
+      store.read(MemoryFile.User),
+      "User likes Kotlin\n§\nUser likes Scala 3"
+    )
+    assertSuccess(store.add(MemoryFile.User, "User likes Kotlin a lot"))
+    assertSuccess(store.remove(MemoryFile.User, "User likes Kotlin"))
+    assertEquals(
+      store.read(MemoryFile.User),
+      "User likes Scala 3\n§\nUser likes Kotlin a lot"
+    )
+
   test("remove deletes the complete entry identified by a substring"):
     val store = freshStore()
     assertSuccess(store.add(MemoryFile.Memory, "one"))
