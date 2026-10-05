@@ -7,6 +7,7 @@ import capybaraclaw.gateway.port.slack.SlackPort
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import gears.async.default.given
 import tacit.agents.llm.endpoint.{
+  Content,
   Endpoint,
   LLMConfig,
   LLMError,
@@ -86,6 +87,7 @@ class FakePort(
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
   private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
+  private val toolCalls = LinkedBlockingQueue[(String, String)]()
 
   def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
 
@@ -103,6 +105,18 @@ class FakePort(
         sentReplies.put(
           FakePort.Reply(sessionId, FakePort.replyHandle(origin), reason)
         )
+
+  override def sendToolCall(
+      sessionId: SessionId,
+      origin: Origin,
+      toolName: String,
+      args: String
+  ): Unit =
+    toolCalls.put(toolName -> args)
+
+  /** Tool calls reported so far, as `(name, args)`. */
+  def reportedToolCalls: List[(String, String)] =
+    toolCalls.asScala.toList
 
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     finishedTurns.put(sessionId)
@@ -371,6 +385,37 @@ class GatewaySuite extends munit.FunSuite:
       assertEquals(persisted(2).text, "[U_bob] pong")
       assertEquals(persisted(3).role, Role.Assistant)
       assertEquals(persisted(3).text, "yes")
+    }
+
+  test("each reported tool call carries the args of its own call"):
+    val port = FakePort(SlackPort.Id, _ => Conversation.Group("C1"))
+    val first = """{"action": "add", "target": "channel", "content": "A"}"""
+    val second = """{"action": "add", "target": "public", "content": "B"}"""
+    val toolCalls = ChatResponse(
+      Message(
+        Role.Assistant,
+        List(
+          Content.ToolUse("call-a", "memory", first),
+          Content.ToolUse("call-b", "memory", second)
+        )
+      ),
+      FinishReason.ToolUse
+    )
+    runGateway(
+      List(port),
+      FakeContextProvider(),
+      endpointFactory =
+        () => StubEndpoint(List(toolCalls, textResponse("done"))),
+      created = AtomicInteger(0)
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "C1/1"), "go")
+      )
+      assertEquals(port.nextReply().text, "done")
+      assertEquals(
+        port.reportedToolCalls,
+        List("memory" -> first, "memory" -> second)
+      )
     }
 
   test("a shared session gets channel and public memory, never private"):

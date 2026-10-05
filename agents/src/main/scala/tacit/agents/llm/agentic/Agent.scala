@@ -14,9 +14,10 @@ import endpoint.{
   StreamEvent
 }
 import tacit.agents.utils.Result
-import tacit.agents.utils.Result.ok
 import llm.utils.{IsToolArg, ToolArgParsingError}
 import scala.util.boundary
+import scala.util.control.NonFatal
+import java.util.concurrent.CancellationException
 import scala.annotation.tailrec
 import java.util.concurrent.atomic.AtomicBoolean
 import gears.async.{
@@ -143,7 +144,7 @@ abstract class Agent:
           case tu: Content.ToolUse => tu
 
         val toolResults = toolUses.map: tu =>
-          val result = dispatchTool(tu).ok
+          val result = dispatchTool(tu)
           val resultContent = result.content.collectFirst:
             case Content.ToolResult(_, content, _) => content
           onToolCall.foreach(_(tu.name, tu.input, resultContent.getOrElse("")))
@@ -207,33 +208,27 @@ abstract class Agent:
           val toolUses = response.message.content.collect:
             case tu: Content.ToolUse => tu
 
-          val dispatched = toolUses.map(tu => (tu, dispatchTool(tu)))
-          val failed = dispatched.collectFirst { case (_, Left(err)) => err }
-
-          failed match
-            case Some(err) =>
-              ch.send(Left(err))
-            case None =>
-              for case (tu, Right(msg)) <- dispatched do
-                val resultContent = msg.content.collectFirst:
-                  case Content.ToolResult(_, content, _) => content
-                ch.send(
-                  Right(
-                    AgentStreamEvent.ToolResult(
-                      tu.id,
-                      tu.name,
-                      resultContent.getOrElse("")
-                    )
-                  )
+          for tu <- toolUses do
+            val msg = dispatchTool(tu)
+            state.messages = state.messages :+ msg
+            val resultContent = msg.content.collectFirst:
+              case Content.ToolResult(_, content, _) => content
+            ch.send(
+              Right(
+                AgentStreamEvent.ToolResult(
+                  tu.id,
+                  tu.name,
+                  resultContent.getOrElse("")
                 )
-                state.messages = state.messages :+ msg
+              )
+            )
 
-              val steered = drainSteering(steering)
-              if steered.nonEmpty then
-                state.messages = state.messages ++ steered.map(Message.user)
-                ch.send(Right(AgentStreamEvent.Steered(steered)))
+          val steered = drainSteering(steering)
+          if steered.nonEmpty then
+            state.messages = state.messages ++ steered.map(Message.user)
+            ch.send(Right(AgentStreamEvent.Steered(steered)))
 
-              streamLoop(config, ch, steering)
+          streamLoop(config, ch, steering)
 
         case FinishReason.MaxTokens =>
           redactMaxTokensMessage(response)
@@ -280,22 +275,28 @@ abstract class Agent:
     state.messages =
       state.messages.init :+ response.message.copy(content = cleaned)
 
-  private def dispatchTool(
-      toolUse: Content.ToolUse
-  ): Result[Message, AgentError] =
+  /** Every tool call gets a result, an error one when the call is invalid or
+    * the tool throws: providers reject a history with an unanswered call, and
+    * the model can correct itself instead of the run ending.
+    */
+  private def dispatchTool(toolUse: Content.ToolUse): Message =
+    def error(text: String) = Message.toolResult(toolUse.id, text, true)
     tools.find(_.name == toolUse.name) match
       case None =>
-        Left(AgentError(s"Unknown tool: ${toolUse.name}"))
+        error(s"Unknown tool: ${toolUse.name}")
 
       case Some(tool) =>
         tool.parseArgs(toolUse.input) match
           case Left(err) =>
-            Left(
-              AgentError(
-                s"Failed to parse args for ${toolUse.name}: ${err.message}"
-              )
-            )
+            error(s"Failed to parse args for ${toolUse.name}: ${err.message}")
 
           case Right(args) =>
-            val result = tool.handle(args.asInstanceOf[tool.ArgType], state)
-            Right(Message.toolResult(toolUse.id, result))
+            try
+              Message.toolResult(
+                toolUse.id,
+                tool.handle(args.asInstanceOf[tool.ArgType], state)
+              )
+            catch
+              case e: CancellationException => throw e
+              case NonFatal(e)              =>
+                error(s"Tool ${toolUse.name} failed: $e")

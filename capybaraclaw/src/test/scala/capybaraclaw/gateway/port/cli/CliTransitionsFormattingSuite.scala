@@ -148,6 +148,12 @@ class CliTransitionsFormattingSuite extends FunSuite:
     assertEquals(out.length, CliTransitions.ToolArgsMaxLen)
     assert(out.endsWith("…"))
 
+  test("formatToolCall: replaces control characters in name and args"):
+    assertEquals(
+      CliTransitions.formatToolCall("x\u001b[2J", "a\u001b[2Jb\u0007c"),
+      "x [2J(a [2Jb c)"
+    )
+
   test("compactArgs: never splits a surrogate pair when truncating"):
     val out = CliTransitions.compactArgs("x" * 78 + "😀😀😀")
     assertEquals(out, "x" * 78 + "😀…")

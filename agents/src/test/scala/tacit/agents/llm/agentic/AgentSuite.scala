@@ -141,6 +141,36 @@ def toolCallResponse(calls: (String, String, String)*): ChatResponse =
 
 val defaultConfig = LLMConfig(model = "test-model")
 
+object ThrowingTool extends AgentTool[AgentState]:
+  type ArgType = LookupArgs
+  def name = "explode"
+  def description = "Always throws"
+  def handle(arg: LookupArgs, state: AgentState): String =
+    throw IllegalStateException("boom")
+
+/** The tool result answering `id` in `messages`, with its error flag. */
+def toolResultIn(messages: List[Message], id: String): (String, Boolean) =
+  messages
+    .flatMap(_.content)
+    .collectFirst { case Content.ToolResult(`id`, content, isError) =>
+      (content, isError)
+    }
+    .getOrElse(throw AssertionError(s"no tool result for $id"))
+
+/** Tool calls not answered by a result in the next message, which providers
+  * reject.
+  */
+def unansweredToolUses(messages: List[Message]): List[String] =
+  messages
+    .zip(messages.drop(1).map(Some(_)) :+ None)
+    .flatMap: (msg, next) =>
+      val answered = next.toList.flatMap(_.content.collect {
+        case Content.ToolResult(id, _, _) => id
+      })
+      msg.content
+        .collect { case Content.ToolUse(id, _, _) => id }
+        .filterNot(answered.contains)
+
 def makeAgent(tools: List[AgentTool[AgentState]] = Nil): Agent =
   val agent = new Agent:
     type State = SimpleState
@@ -209,31 +239,35 @@ class AgentSuite extends munit.FunSuite:
         case Content.ToolResult(id, content, _) => (id, content)
     assertEquals(toolResults.size, 2)
 
-  test("ask: unknown tool name returns error"):
+  test("ask: unknown tool name is answered with an error result"):
     val ep = StubEndpoint(
       List(
-        toolCallResponse(("call-1", "nonexistent", """{}"""))
+        toolCallResponse(("call-1", "nonexistent", """{}""")),
+        textResponse("sorry")
       )
     )
     given Endpoint = ep
     val agent = makeAgent()
     val result = agent.ask("Call something")
-    assert(result.isLeft)
-    assert(result.swap.toOption.get.description.contains("Unknown tool"))
+    assertEquals(result.map(_.message.text), Right("sorry"))
+    val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+    assert(isError)
+    assert(content.contains("Unknown tool"), content)
 
-  test("ask: tool arg parse failure returns error"):
+  test("ask: tool arg parse failure is answered with an error result"):
     val ep = StubEndpoint(
       List(
-        toolCallResponse(("call-1", "calculate", """not json"""))
+        toolCallResponse(("call-1", "calculate", """not json""")),
+        textResponse("sorry")
       )
     )
     given Endpoint = ep
     val agent = makeAgent(List(CalcTool))
     val result = agent.ask("Calculate")
-    assert(result.isLeft)
-    assert(
-      result.swap.toOption.get.description.contains("Failed to parse args")
-    )
+    assertEquals(result.map(_.message.text), Right("sorry"))
+    val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+    assert(isError)
+    assert(content.contains("Failed to parse args"), content)
 
   test("ask: endpoint error propagates"):
     val ep = StubEndpoint(Nil)
@@ -407,33 +441,90 @@ class AgentSuite extends munit.FunSuite:
       val events = readAll(ch)
       assert(events.exists(_.isLeft))
 
-  test("streamAsk: unknown tool emits error"):
+  test("streamAsk: unknown tool is answered with an error result"):
     Async.blocking:
       val ep = StubEndpoint(
         List(
-          toolCallResponse(("call-1", "nonexistent", """{}"""))
+          toolCallResponse(("call-1", "nonexistent", """{}""")),
+          textResponse("sorry")
         )
       )
       given Endpoint = ep
       val agent = makeAgent()
-      val ch = agent.streamAsk("Call something").events
-      val events = readAll(ch)
-      val errors = events.collect { case Left(e) => e }
-      assert(errors.exists(_.description.contains("Unknown tool")))
+      val events = readAll(agent.streamAsk("Call something").events)
+      assert(!events.exists(_.isLeft), events)
+      val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+      assert(isError)
+      assert(content.contains("Unknown tool"), content)
 
-  test("streamAsk: tool arg parse failure emits error"):
+  test("streamAsk: tool arg parse failure is answered with an error result"):
     Async.blocking:
       val ep = StubEndpoint(
         List(
-          toolCallResponse(("call-1", "calculate", """not json"""))
+          toolCallResponse(("call-1", "calculate", """not json""")),
+          textResponse("sorry")
         )
       )
       given Endpoint = ep
       val agent = makeAgent(List(CalcTool))
-      val ch = agent.streamAsk("Calculate").events
-      val events = readAll(ch)
-      val errors = events.collect { case Left(e) => e }
-      assert(errors.exists(_.description.contains("Failed to parse args")))
+      val events = readAll(agent.streamAsk("Calculate").events)
+      assert(!events.exists(_.isLeft), events)
+      val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+      assert(isError)
+      assert(content.contains("Failed to parse args"), content)
+
+  test(
+    "streamAsk: a bad tool call leaves no unanswered call for the next turn"
+  ):
+    Async.blocking:
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "calculate", """not json""")),
+          textResponse("sorry"),
+          textResponse("ok")
+        )
+      )
+      given Endpoint = ep
+      val agent = makeAgent(List(CalcTool))
+      readAll(agent.streamAsk("first").events)
+      readAll(agent.streamAsk("second").events)
+      assertEquals(unansweredToolUses(ep.invokedWith.last), Nil)
+
+  test("streamAsk: a tool that ran is reported when a sibling call fails"):
+    Async.blocking:
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(
+            ("call-1", "lookup", """{"key": "pi"}"""),
+            ("call-2", "calculate", """not json""")
+          ),
+          textResponse("done")
+        )
+      )
+      given Endpoint = ep
+      val agent = makeAgent(List(LookupTool, CalcTool))
+      val events = readAll(agent.streamAsk("go").events)
+      val reported = events.collect:
+        case Right(AgentStreamEvent.ToolResult(id, _, _)) => id
+      assertEquals(reported, List("call-1", "call-2"))
+      assertEquals(toolResultIn(ep.invokedWith(1), "call-1")._2, false)
+      assertEquals(toolResultIn(ep.invokedWith(1), "call-2")._2, true)
+
+  test("streamAsk: a tool that throws is answered with an error result"):
+    Async.blocking:
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "explode", """{"key": "x"}""")),
+          textResponse("recovered")
+        )
+      )
+      given Endpoint = ep
+      val agent = makeAgent(List(ThrowingTool))
+      val events = readAll(agent.streamAsk("go").events)
+      assert(!events.exists(_.isLeft), events)
+      val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+      assert(isError)
+      assert(content.contains("boom"), content)
 
   test("streamAsk: multiple tool calls in one response"):
     Async.blocking:

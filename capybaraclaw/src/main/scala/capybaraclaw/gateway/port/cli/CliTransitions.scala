@@ -256,13 +256,17 @@ object CliTransitions:
   val ToolArgsMaxLen: Int = 80
 
   def formatToolCall(toolName: String, args: String): String =
-    s"$toolName(${compactArgs(args)})"
+    s"${compactWhitespace(toolName)}(${compactArgs(args)})"
 
   def compactArgs(args: String): String =
     truncate(compactWhitespace(args), ToolArgsMaxLen)
 
+  /** Control characters go too: a call to an unknown tool, or with args that
+    * do not parse, is still reported, with the name and args exactly as the
+    * model sent them, so an escape sequence in them would reach the terminal.
+    */
   private def compactWhitespace(text: String): String =
-    text.trim.replaceAll("\\s+", " ")
+    text.replaceAll("[\\s\\p{Cc}]+", " ").trim
 
   private def truncate(text: String, maxLen: Int): String =
     if text.codePointCount(0, text.length) <= maxLen then text
