@@ -162,12 +162,17 @@ class CliTransitionsSuite extends FunSuite:
 
   /** ToolCall */
 
-  test("ToolCall while running: renders name(args)"):
+  test(
+    "ToolCall while running: flushes streamed text, then renders name(args)"
+  ):
     val r = transition(midTurn, ToolCall("eval_scala", "{\"code\":\"1\"}"), ctx)
     assertEquals(r.state, midTurn)
     assertEquals(
       r.effects,
-      List(Render(Role.Tool, "eval_scala({\"code\":\"1\"})"))
+      List(
+        RenderAssistantComplete,
+        Render(Role.Tool, "eval_scala({\"code\":\"1\"})")
+      )
     )
 
   test("ToolCall after running=false: no effects"):

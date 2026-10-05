@@ -148,6 +148,10 @@ class CliTransitionsFormattingSuite extends FunSuite:
     assertEquals(out.length, CliTransitions.ToolArgsMaxLen)
     assert(out.endsWith("…"))
 
+  test("compactArgs: never splits a surrogate pair when truncating"):
+    val out = CliTransitions.compactArgs("x" * 78 + "😀😀😀")
+    assertEquals(out, "x" * 78 + "😀…")
+
   test("formatToolCall: renders a single name(args) line"):
     assertEquals(
       CliTransitions.formatToolCall("mem", "{\"q\":1}"),

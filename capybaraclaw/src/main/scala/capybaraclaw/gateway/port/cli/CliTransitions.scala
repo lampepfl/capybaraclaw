@@ -102,10 +102,15 @@ object CliTransitions:
         else TransitionResult(state, Nil)
 
       case ToolCall(toolName, args) =>
+        // Flushes the text streamed before the call, so it prints above the
+        // tool line and the text after it starts a new assistant entry.
         if state.running then
           TransitionResult(
             state,
-            List(Render(Role.Tool, formatToolCall(toolName, args)))
+            List(
+              RenderAssistantComplete,
+              Render(Role.Tool, formatToolCall(toolName, args))
+            )
           )
         else TransitionResult(state, Nil)
 
@@ -260,4 +265,5 @@ object CliTransitions:
     text.trim.replaceAll("\\s+", " ")
 
   private def truncate(text: String, maxLen: Int): String =
-    if text.length <= maxLen then text else s"${text.take(maxLen - 1)}…"
+    if text.codePointCount(0, text.length) <= maxLen then text
+    else s"${text.substring(0, text.offsetByCodePoints(0, maxLen - 1))}…"
