@@ -5,13 +5,15 @@ import java.sql.{Connection, ResultSet}
 import java.time.Instant
 
 private[sqlite] object SessionSearchQueries:
+  import SessionSearch.*
 
-  private val BookendSize = 3
-
+  /** Rank by the best match; newest and oldest by the session's latest and
+    * earliest match.
+    */
   private def orderClause(sort: SearchSort): String = sort match
     case SearchSort.Rank   => "r.rank ASC, r.msg_id ASC"
-    case SearchSort.Newest => "r.msg_id DESC"
-    case SearchSort.Oldest => "r.msg_id ASC"
+    case SearchSort.Newest => "r.newest_id DESC"
+    case SearchSort.Oldest => "r.oldest_id ASC"
 
   def discover(
       conn: Connection,
@@ -21,84 +23,104 @@ private[sqlite] object SessionSearchQueries:
       window: Int,
       sort: SearchSort,
       excludeSession: Option[SessionId]
-  ): List[SessionHit] =
-    if matchExpr.isBlank then Nil
-    else
-      val sql =
-        s"""WITH matched AS (
-           |  SELECT m.id AS msg_id, m.session_id, m.role,
-           |         bm25(messages_fts) AS rank,
-           |         snippet(messages_fts, 0, '«', '»', '…', 12) AS snippet
-           |  FROM messages_fts
-           |  JOIN messages m ON m.id = messages_fts.rowid
-           |  WHERE messages_fts MATCH ?
-           |    AND m.session_id != ?
-           |),
-           |ranked AS (
-           |  SELECT msg_id, session_id, role, rank, snippet,
-           |         ROW_NUMBER() OVER (
-           |           PARTITION BY session_id
-           |           ORDER BY rank ASC, msg_id ASC
-           |         ) AS rn
-           |  FROM matched
-           |)
-           |SELECT r.msg_id, r.session_id, r.role, r.snippet,
-           |       s.workdir, s.created_at AS s_created, s.last_activity,
-           |       (SELECT text FROM messages fm
-           |        WHERE fm.session_id = r.session_id AND fm.role = 'user'
-           |        ORDER BY id ASC LIMIT 1) AS title
-           |FROM ranked r
-           |JOIN sessions s ON s.id = r.session_id
-           |WHERE r.rn = 1
-           |ORDER BY ${orderClause(sort)}
-           |LIMIT ? OFFSET ?""".stripMargin
-      val anchors = SqliteJdbc.withStatement(conn, sql): stmt =>
-        stmt.setString(1, matchExpr)
-        stmt.setString(2, excludeSession.getOrElse(""))
-        stmt.setInt(3, limit)
-        stmt.setInt(4, offset)
-        SqliteJdbc.withResultSet(stmt.executeQuery())(readAnchors)
-      anchors.map: a =>
-        val win = windowAround(conn, a.sessionId, a.matchMessageId, window)
-        val windowIds = win.map(_.id).toSet
-        val notInWindow = (e: MessageEntry) => !windowIds.contains(e.id)
-        SessionHit(
-          sessionId = a.sessionId,
-          workdir = a.workdir,
-          title = deriveTitle(a.title),
-          sessionCreatedAt = Instant.ofEpochMilli(a.sessionCreated),
-          lastActivity = Instant.ofEpochMilli(a.lastActivity),
-          matchMessageId = a.matchMessageId,
-          matchedRole = a.role,
-          snippet = a.snippet,
-          window = win,
-          bookendStart =
-            bookend(conn, a.sessionId, ascending = true).filter(notInWindow),
-          bookendEnd =
-            bookend(conn, a.sessionId, ascending = false).filter(notInWindow)
-        )
+  ): Discovery =
+    val excluded = excludeSession.map(_.toString).getOrElse("")
+    val countSql =
+      """SELECT COUNT(DISTINCT m.session_id)
+        |FROM messages_fts
+        |JOIN messages m ON m.id = messages_fts.rowid
+        |WHERE messages_fts MATCH ? AND m.session_id != ?""".stripMargin
+    val total = SqliteJdbc.withStatement(conn, countSql): stmt =>
+      stmt.setString(1, matchExpr)
+      stmt.setString(2, excluded)
+      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+        if rs.next() then rs.getInt(1) else 0
+    val sql =
+      s"""WITH matched AS (
+         |  SELECT m.id AS msg_id, m.session_id, bm25(messages_fts) AS rank
+         |  FROM messages_fts
+         |  JOIN messages m ON m.id = messages_fts.rowid
+         |  WHERE messages_fts MATCH ? AND m.session_id != ?
+         |),
+         |ranked AS (
+         |  SELECT msg_id, session_id, rank,
+         |         ROW_NUMBER() OVER (
+         |           PARTITION BY session_id ORDER BY rank ASC, msg_id ASC
+         |         ) AS rn,
+         |         COUNT(*) OVER (PARTITION BY session_id) AS matched_count,
+         |         MAX(msg_id) OVER (PARTITION BY session_id) AS newest_id,
+         |         MIN(msg_id) OVER (PARTITION BY session_id) AS oldest_id
+         |  FROM matched
+         |)
+         |SELECT r.msg_id, r.session_id, r.matched_count,
+         |       s.workdir, s.created_at, s.last_activity,
+         |       (SELECT text FROM messages fm
+         |        WHERE fm.session_id = r.session_id AND fm.role = 'user'
+         |        ORDER BY id ASC LIMIT 1) AS title
+         |FROM ranked r
+         |JOIN sessions s ON s.id = r.session_id
+         |WHERE r.rn = 1
+         |ORDER BY ${orderClause(sort)}
+         |LIMIT ? OFFSET ?""".stripMargin
+    val anchors = SqliteJdbc.withStatement(conn, sql): stmt =>
+      stmt.setString(1, matchExpr)
+      stmt.setString(2, excluded)
+      stmt.setInt(3, limit)
+      stmt.setInt(4, offset)
+      SqliteJdbc.withResultSet(stmt.executeQuery())(readAnchors)
+    val hits = anchors.map: a =>
+      SessionHit(
+        session = a.session,
+        matchedMessages = a.matchedCount,
+        matches = matchesIn(conn, matchExpr, a.session.sessionId),
+        context = metaAround(conn, a.session.sessionId, a.bestMessageId, window)
+      )
+    Discovery(total, hits)
 
   def scroll(
       conn: Connection,
       sessionId: SessionId,
       aroundMessageId: Long,
-      window: Int
+      window: Int,
+      fullText: Boolean
   ): Option[SessionWindow] =
     // Require both the session and the anchor message to exist, so a caller
     // cannot page an arbitrary id that yields a window with no real anchor.
-    sessionRow(conn, sessionId)
+    sessionInfo(conn, sessionId)
       .filter(_ => messageExists(conn, sessionId, aroundMessageId))
-      .map: s =>
-        val win = windowAround(conn, sessionId, aroundMessageId, window)
-        SessionWindow(
-          sessionId = sessionId,
-          workdir = s.workdir,
-          title = deriveTitle(firstUserText(conn, sessionId)),
-          sessionCreatedAt = Instant.ofEpochMilli(s.created),
-          lastActivity = Instant.ofEpochMilli(s.lastActivity),
-          aroundMessageId = aroundMessageId,
-          window = win
+      .map: info =>
+        val messages =
+          around(conn, sessionId, aroundMessageId, window, withText = true)
+            .map: (meta, text) =>
+              WindowMessage(meta, Option.when(fullText)(text))
+        SessionWindow(info, aroundMessageId, messages)
+
+  def get(
+      conn: Connection,
+      ids: List[Long],
+      excludeSession: Option[SessionId]
+  ): List[FullMessage] =
+    if ids.isEmpty then Nil
+    else
+      val sql =
+        s"""SELECT id, session_id, role, created_at, text FROM messages
+           |WHERE id IN (${ids.map(_ => "?").mkString(", ")})
+           |  AND session_id != ?
+           |ORDER BY id ASC""".stripMargin
+      SqliteJdbc.withStatement(conn, sql): stmt =>
+        ids.zipWithIndex.foreach((id, i) => stmt.setLong(i + 1, id))
+        stmt.setString(
+          ids.size + 1,
+          excludeSession.map(_.toString).getOrElse("")
         )
+        SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+          rows(rs): rs =>
+            val text = rs.getString("text")
+            FullMessage(
+              SessionId(rs.getString("session_id")),
+              meta(rs, text),
+              text
+            )
 
   def browse(
       conn: Connection,
@@ -117,59 +139,113 @@ private[sqlite] object SessionSearchQueries:
         |ORDER BY s.last_activity DESC
         |LIMIT ? OFFSET ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, excludeSession.getOrElse(""))
+      stmt.setString(1, excludeSession.map(_.toString).getOrElse(""))
       stmt.setInt(2, limit)
       stmt.setInt(3, offset)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        Iterator
-          .continually(rs.next())
-          .takeWhile(identity)
-          .map: _ =>
-            SessionSummary(
-              sessionId = SessionId(rs.getString("id")),
-              workdir = rs.getString("workdir"),
-              title = deriveTitle(Option(rs.getString("title"))),
-              createdAt = Instant.ofEpochMilli(rs.getLong("created_at")),
-              lastActivity = Instant.ofEpochMilli(rs.getLong("last_activity")),
-              messageCount = rs.getInt("msg_count")
-            )
-          .toList
-
-  private final case class SessionRow(
-      workdir: String,
-      created: Long,
-      lastActivity: Long
-  )
-
-  private def sessionRow(
-      conn: Connection,
-      sessionId: SessionId
-  ): Option[SessionRow] =
-    val sql =
-      "SELECT workdir, created_at, last_activity FROM sessions WHERE id = ?"
-    SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId)
-      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then
-          Some(
-            SessionRow(
-              rs.getString("workdir"),
-              rs.getLong("created_at"),
-              rs.getLong("last_activity")
-            )
+        rows(rs): rs =>
+          SessionSummary(
+            sessionId = SessionId(rs.getString("id")),
+            workdir = rs.getString("workdir"),
+            title = deriveTitle(Option(rs.getString("title"))),
+            createdAt = Instant.ofEpochMilli(rs.getLong("created_at")),
+            lastActivity = Instant.ofEpochMilli(rs.getLong("last_activity")),
+            messageCount = rs.getInt("msg_count")
           )
-        else None
 
-  private def firstUserText(
+  /** The best-ranked matched messages of a session, in id order. */
+  private def matchesIn(
+      conn: Connection,
+      matchExpr: String,
+      sessionId: SessionId
+  ): List[MessageMatch] =
+    val sql =
+      """SELECT m.id, m.role, m.created_at, m.text,
+        |       highlight(messages_fts, 0, ?, ?) AS highlighted
+        |FROM messages_fts
+        |JOIN messages m ON m.id = messages_fts.rowid
+        |WHERE messages_fts MATCH ? AND m.session_id = ?
+        |ORDER BY bm25(messages_fts) ASC, m.id ASC
+        |LIMIT ?""".stripMargin
+    SqliteJdbc
+      .withStatement(conn, sql): stmt =>
+        stmt.setString(1, Fragments.Open.toString)
+        stmt.setString(2, Fragments.Close.toString)
+        stmt.setString(3, matchExpr)
+        stmt.setString(4, sessionId)
+        stmt.setInt(5, MatchesPerSession)
+        SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+          rows(rs): rs =>
+            val text = rs.getString("text")
+            val ranges =
+              Fragments.ranges(text, rs.getString("highlighted")).getOrElse(Nil)
+            val fragments =
+              Fragments.render(text, ranges, FragmentRadius, BoundarySlack)
+            MessageMatch(
+              message = meta(rs, text),
+              matchCount = ranges.size,
+              fragments = fragments.take(FragmentsPerMessage),
+              moreFragments = math.max(0, fragments.size - FragmentsPerMessage)
+            )
+      .sortBy(_.message.id)
+
+  private def metaAround(
+      conn: Connection,
+      sessionId: SessionId,
+      anchorId: Long,
+      window: Int
+  ): List[MessageMeta] =
+    around(conn, sessionId, anchorId, window, withText = false).map(_._1)
+
+  /** Up to `window` messages on each side of `anchorId`, and the anchor. */
+  private def around(
+      conn: Connection,
+      sessionId: SessionId,
+      anchorId: Long,
+      window: Int,
+      withText: Boolean
+  ): List[(MessageMeta, String)] =
+    val text = if withText then "text" else "'' AS text"
+    def select(sql: String, limit: Int) =
+      SqliteJdbc.withStatement(conn, sql): stmt =>
+        stmt.setString(1, sessionId)
+        stmt.setLong(2, anchorId)
+        stmt.setInt(3, limit)
+        SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+          rows(rs): rs =>
+            val t = rs.getString("text")
+            val m = MessageMeta(
+              rs.getLong("id"),
+              rs.getString("role"),
+              Instant.ofEpochMilli(rs.getLong("created_at")),
+              rs.getInt("len")
+            )
+            (m, t)
+    val columns = s"id, role, created_at, length(text) AS len, $text"
+    val before = select(
+      s"SELECT $columns FROM messages WHERE session_id = ? AND id <= ? ORDER BY id DESC LIMIT ?",
+      window + 1
+    ).reverse
+    val after = select(
+      s"SELECT $columns FROM messages WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
+      window
+    )
+    before ++ after
+
+  private def sessionInfo(
       conn: Connection,
       sessionId: SessionId
-  ): Option[String] =
+  ): Option[SessionInfo] =
     val sql =
-      "SELECT text FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id ASC LIMIT 1"
+      """SELECT s.workdir, s.created_at, s.last_activity,
+        |       (SELECT text FROM messages m
+        |        WHERE m.session_id = s.id AND m.role = 'user'
+        |        ORDER BY id ASC LIMIT 1) AS title
+        |FROM sessions s WHERE s.id = ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
       stmt.setString(1, sessionId)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        if rs.next() then Option(rs.getString("text")) else None
+        Option.when(rs.next())(info(rs, sessionId))
 
   private def messageExists(
       conn: Connection,
@@ -183,31 +259,42 @@ private[sqlite] object SessionSearchQueries:
       SqliteJdbc.withResultSet(stmt.executeQuery())(_.next())
 
   private final case class AnchorRow(
-      matchMessageId: Long,
-      sessionId: SessionId,
-      role: String,
-      snippet: String,
-      workdir: String,
-      sessionCreated: Long,
-      lastActivity: Long,
-      title: Option[String]
+      session: SessionInfo,
+      bestMessageId: Long,
+      matchedCount: Int
   )
 
   private def readAnchors(rs: ResultSet): List[AnchorRow] =
+    rows(rs): rs =>
+      AnchorRow(
+        session = info(rs, SessionId(rs.getString("session_id"))),
+        bestMessageId = rs.getLong("msg_id"),
+        matchedCount = rs.getInt("matched_count")
+      )
+
+  /** Reads `workdir`, `created_at`, `last_activity` and `title`. */
+  private def info(rs: ResultSet, sessionId: SessionId): SessionInfo =
+    SessionInfo(
+      sessionId = sessionId,
+      workdir = rs.getString("workdir"),
+      title = deriveTitle(Option(rs.getString("title"))),
+      createdAt = Instant.ofEpochMilli(rs.getLong("created_at")),
+      lastActivity = Instant.ofEpochMilli(rs.getLong("last_activity"))
+    )
+
+  private def meta(rs: ResultSet, text: String): MessageMeta =
+    MessageMeta(
+      rs.getLong("id"),
+      rs.getString("role"),
+      Instant.ofEpochMilli(rs.getLong("created_at")),
+      text.codePointCount(0, text.length)
+    )
+
+  private def rows[A](rs: ResultSet)(read: ResultSet => A): List[A] =
     Iterator
       .continually(rs.next())
       .takeWhile(identity)
-      .map: _ =>
-        AnchorRow(
-          matchMessageId = rs.getLong("msg_id"),
-          sessionId = SessionId(rs.getString("session_id")),
-          role = rs.getString("role"),
-          snippet = rs.getString("snippet"),
-          workdir = rs.getString("workdir"),
-          sessionCreated = rs.getLong("s_created"),
-          lastActivity = rs.getLong("last_activity"),
-          title = Option(rs.getString("title"))
-        )
+      .map(_ => read(rs))
       .toList
 
   // TODO: replace this derivation with an LLM-generated title
@@ -222,68 +309,3 @@ private[sqlite] object SessionSearchQueries:
   private val userTagPrefix = """^\[[^\]]*\]\s+""".r
   private def stripUserTag(line: String): String =
     userTagPrefix.replaceFirstIn(line, "")
-
-  def windowAround(
-      conn: Connection,
-      sessionId: SessionId,
-      anchorId: Long,
-      window: Int
-  ): List[MessageEntry] =
-    val before = selectMessages(
-      conn,
-      "SELECT id, role, text, created_at FROM messages WHERE session_id = ? AND id <= ? ORDER BY id DESC LIMIT ?",
-      sessionId,
-      Some(anchorId),
-      window + 1
-    ).reverse
-    val after = selectMessages(
-      conn,
-      "SELECT id, role, text, created_at FROM messages WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
-      sessionId,
-      Some(anchorId),
-      window
-    )
-    (before ++ after).map(e => e.copy(anchor = e.id == anchorId))
-
-  private def bookend(
-      conn: Connection,
-      sessionId: SessionId,
-      ascending: Boolean
-  ): List[MessageEntry] =
-    val dir = if ascending then "ASC" else "DESC"
-    val rows = selectMessages(
-      conn,
-      s"SELECT id, role, text, created_at FROM messages WHERE session_id = ? ORDER BY id $dir LIMIT ?",
-      sessionId,
-      None,
-      BookendSize
-    )
-    if ascending then rows else rows.reverse
-
-  private def selectMessages(
-      conn: Connection,
-      sql: String,
-      sessionId: SessionId,
-      boundaryId: Option[Long],
-      limit: Int
-  ): List[MessageEntry] =
-    SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId)
-      boundaryId match
-        case Some(id) =>
-          stmt.setLong(2, id)
-          stmt.setInt(3, limit)
-        case None =>
-          stmt.setInt(2, limit)
-      SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
-        Iterator
-          .continually(rs.next())
-          .takeWhile(identity)
-          .map: _ =>
-            MessageEntry(
-              id = rs.getLong("id"),
-              role = rs.getString("role"),
-              text = rs.getString("text"),
-              createdAt = Instant.ofEpochMilli(rs.getLong("created_at"))
-            )
-          .toList

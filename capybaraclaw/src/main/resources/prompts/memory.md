@@ -50,7 +50,7 @@ the environment or project, save it right away rather than waiting to be asked.
 
 When the user references something from a past conversation, or you suspect relevant
 cross-session context exists, use the `session_search` tool to recall it before asking
-them to repeat themselves. Memory holds durable facts; `session_search` retrieves the
+them to repeat themselves. Memory holds durable facts; `session_search` searches the
 full transcripts of your past sessions (across all projects).
 
 When a file approaches its cap (~80%), consolidate by replacing or removing older entries.

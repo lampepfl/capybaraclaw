@@ -15,48 +15,66 @@ object SessionSearchTool:
 
   case class Args(
       @desc(
-        "Terms that must ALL appear (AND). Set any of allOf/anyOf to search (discover mode). " +
+        "Terms that must ALL appear (AND). Set any of all_of/any_of to search (discover mode). " +
           "Each term is matched literally — a term may be a single word or a multi-word phrase."
       )
-      allOf: Option[List[String]] = None,
+      all_of: Option[List[String]] = None,
       @desc("Terms where at least ONE must appear (OR). Matched literally.")
-      anyOf: Option[List[String]] = None,
+      any_of: Option[List[String]] = None,
       @desc(
-        "Terms that must NOT appear (NOT). Requires at least one allOf/anyOf term. Matched literally."
+        "Terms that must NOT appear (NOT). Requires at least one all_of/any_of term. Matched literally."
       )
-      noneOf: Option[List[String]] = None,
+      none_of: Option[List[String]] = None,
       @desc(
-        "Prefix-match the positive (allOf/anyOf) terms, e.g. 'deploy' also matches 'deployment'. Exclusions stay exact."
+        "Prefix-match the positive (all_of/any_of) terms, e.g. 'deploy' also matches 'deployment'. Exclusions stay exact."
       )
       prefix: Option[Boolean] = None,
-      @desc("Session UUID to scroll within. Requires around_message_id.")
-      sessionId: Option[String] = None,
-      @desc("Message id to center the scroll window on. Requires sessionId.")
-      aroundMessageId: Option[Int] = None,
-      @desc("Max results (discover/browse). Defaults: discover 3, browse 5.")
+      @desc(
+        "Session id to scroll within (scroll mode). Requires around_message_id."
+      )
+      session_id: Option[String] = None,
+      @desc("Message id to center the scroll window on. Requires session_id.")
+      around_message_id: Option[Long] = None,
+      @desc(
+        "Scroll mode: include each message's whole text. Off by default; check message lengths first."
+      )
+      full_text: Option[Boolean] = None,
+      @desc(
+        s"Ids of messages to fetch whole (get mode), at most $MaxGetIds."
+      )
+      message_ids: Option[List[Long]] = None,
+      @desc(
+        s"Max results. Discover default 3 (at most $MaxDiscoverLimit), browse default 5 (at most $MaxBrowseLimit)."
+      )
       limit: Option[Int] = None,
       @desc(
         "Number of results to skip, for paging (discover/browse). Default 0."
       )
       offset: Option[Int] = None,
       @desc(
-        "Context messages on each side of a match. Discover default 5, scroll default 10."
+        s"Messages on each side of the best match (discover, default 5, at most $MaxDiscoverWindow) " +
+          s"or of around_message_id (scroll, default 10, at most $MaxScrollWindow)."
       )
       window: Option[Int] = None,
-      @desc("Sort for discover: 'rank' (default), 'newest', or 'oldest'.")
+      @desc(
+        "Discover order: 'rank' (best match first, default), 'newest' or 'oldest' (by the session's latest or earliest match)."
+      )
       sort: Option[String] = None
   ) derives IsToolArg
 
   val name: String = "session_search"
   val description: String =
     "Search your own past sessions (all projects) by full text. " +
-      "Three modes, inferred from arguments: " +
-      "set 'allOf'/'anyOf'/'noneOf' to find sessions matching terms (discover) — returns one hit per " +
-      "session with a highlighted snippet and surrounding messages; " +
-      "set 'sessionId' + 'aroundMessageId' to page through a session's messages (scroll); " +
+      "Four modes, inferred from arguments: " +
+      "set 'all_of'/'any_of'/'none_of' to find sessions matching terms (discover) — returns one result per " +
+      s"session with fragments of about ${SessionSearch.FragmentRadius} characters around each «match» " +
+      "and the ids, roles and lengths of the surrounding messages, never whole messages; " +
+      "set 'message_ids' to fetch whole messages (get); " +
+      "set 'session_id' + 'around_message_id' to page through a session's messages (scroll); " +
       "pass no arguments to list your most recent sessions (browse). " +
-      "The current session is always excluded. Terms are matched literally — you do NOT write query " +
-      "syntax; combine them via the allOf (AND), anyOf (OR) and noneOf (NOT) lists."
+      "A fragment is only part of its message: fetch the whole message with 'message_ids' before relying on " +
+      "what it says. The current session is always excluded. Terms are matched literally — you do NOT write " +
+      "query syntax; combine them via the all_of (AND), any_of (OR) and none_of (NOT) lists."
 
   def register(
       agent: Agent,
@@ -73,17 +91,20 @@ object SessionSearchTool:
       .ofPattern("yyyy-MM-dd HH:mm 'UTC'")
       .withZone(ZoneOffset.UTC)
 
-  private val MaxLimit = 25
-  private val MaxWindow = 50
+  private val MaxDiscoverLimit = 10
+  private val MaxBrowseLimit = 25
+  private val MaxDiscoverWindow = 20
+  private val MaxScrollWindow = 50
+  private val MaxGetIds = 20
 
-  private def clampLimit(value: Option[Int], default: Int): Int =
-    value.getOrElse(default).max(1).min(MaxLimit)
+  private def clamp(value: Option[Int], default: Int, max: Int): Int =
+    value.getOrElse(default).max(1).min(max)
 
   private def clampOffset(value: Option[Int]): Int =
     value.getOrElse(0).max(0)
 
-  private def clampWindow(value: Option[Int], default: Int): Int =
-    value.getOrElse(default).max(0).min(MaxWindow)
+  private def clampWindow(value: Option[Int], default: Int, max: Int): Int =
+    value.getOrElse(default).max(0).min(max)
 
   /** Dispatch to the mode implied by the arguments and render the result JSON. */
   private[tools] def run(
@@ -91,29 +112,40 @@ object SessionSearchTool:
       current: SessionId,
       args: Args
   ): String =
-    val allOf = args.allOf.getOrElse(Nil)
-    val anyOf = args.anyOf.getOrElse(Nil)
-    val noneOf = args.noneOf.getOrElse(Nil)
+    val allOf = args.all_of.getOrElse(Nil)
+    val anyOf = args.any_of.getOrElse(Nil)
+    val noneOf = args.none_of.getOrElse(Nil)
     val hasPositive = allOf.nonEmpty || anyOf.nonEmpty
     val hasSearch = hasPositive || noneOf.nonEmpty
-    val hasScrollArgs =
-      args.sessionId.isDefined || args.aroundMessageId.isDefined
+    val hasScroll =
+      args.session_id.isDefined || args.around_message_id.isDefined
+    val hasGet = args.message_ids.isDefined
     val json =
       try
-        if hasSearch && hasScrollArgs then
+        if List(hasSearch, hasScroll, hasGet).count(identity) > 1 then
           err(
-            "provide either search terms (discover) or 'sessionId'+'around_message_id' (scroll), not both."
+            "use one mode at a time: search terms (all_of/any_of/none_of), " +
+              "session_id + around_message_id (scroll), or message_ids (get)."
           )
         else if noneOf.nonEmpty && !hasPositive then
-          err("noneOf requires at least one allOf or anyOf term.")
-        else if hasSearch then discover(search, current, args)
+          err("none_of requires at least one all_of or any_of term.")
+        else if hasSearch then
+          args.sort.map(s => s -> SearchSort.parse(s)) match
+            case Some((s, None)) =>
+              err(s"unknown sort '$s'; use ${SearchSort.names}.")
+            case parsed =>
+              val sort = parsed.flatMap(_._2).getOrElse(SearchSort.Rank)
+              discover(search, current, args, sort)
+        else if hasGet then get(search, current, args.message_ids.get)
         else
-          (args.sessionId, args.aroundMessageId) match
+          (args.session_id, args.around_message_id) match
             case (Some(sid), Some(mid)) =>
               scroll(search, current, sid, mid, args)
             case (Some(_), None) =>
-              err("sessionId requires around_message_id to scroll.")
-            case _ => browse(search, current, args)
+              err("session_id requires around_message_id to scroll.")
+            case (None, Some(_)) =>
+              err("around_message_id requires session_id to scroll.")
+            case (None, None) => browse(search, current, args)
       catch
         case NonFatal(e) =>
           logger.error("session_search failed", e)
@@ -124,43 +156,80 @@ object SessionSearchTool:
   private def discover(
       search: SessionSearch,
       current: SessionId,
-      args: Args
+      args: Args,
+      sort: SearchSort
   ): ujson.Obj =
     val terms = SearchTerms(
-      allOf = args.allOf.getOrElse(Nil),
-      anyOf = args.anyOf.getOrElse(Nil),
-      noneOf = args.noneOf.getOrElse(Nil),
+      allOf = args.all_of.getOrElse(Nil),
+      anyOf = args.any_of.getOrElse(Nil),
+      noneOf = args.none_of.getOrElse(Nil),
       prefix = args.prefix.getOrElse(false)
     )
-    val hits = search.discover(
+    val offset = clampOffset(args.offset)
+    val found = search.discover(
       terms = terms,
-      limit = clampLimit(args.limit, 3),
-      offset = clampOffset(args.offset),
-      window = clampWindow(args.window, 5),
-      sort = args.sort.map(SearchSort.fromString).getOrElse(SearchSort.Rank),
+      limit = clamp(args.limit, 3, MaxDiscoverLimit),
+      offset = offset,
+      window = clampWindow(args.window, 5, MaxDiscoverWindow),
+      sort = sort,
       excludeSession = Some(current)
     )
-    ujson.Obj(
+    val next = offset + found.hits.size
+    val result = ujson.Obj(
       "success" -> true,
       "mode" -> "discover",
       "all_of" -> ujson.Arr.from(terms.allOf),
       "any_of" -> ujson.Arr.from(terms.anyOf),
       "none_of" -> ujson.Arr.from(terms.noneOf),
       "prefix" -> terms.prefix,
-      "count" -> hits.size,
-      "results" -> ujson.Arr.from(hits.map(hitJson))
+      "sort" -> sort.toString.toLowerCase,
+      "total_sessions" -> found.totalSessions,
+      "offset" -> offset,
+      "count" -> found.hits.size,
+      "results" -> ujson.Arr.from(found.hits.map(hitJson))
     )
+    if found.hits.nonEmpty && next < found.totalSessions then
+      result("next_offset") = next
+    result
+
+  private def get(
+      search: SessionSearch,
+      current: SessionId,
+      ids: List[Long]
+  ): ujson.Obj =
+    val distinct = ids.distinct
+    if distinct.isEmpty then err("message_ids must not be empty.")
+    else if distinct.size > MaxGetIds then
+      err(s"at most $MaxGetIds message_ids per call.")
+    else
+      val found = search.get(distinct, Some(current))
+      val foundIds = found.map(_.message.id).toSet
+      ujson.Obj(
+        "success" -> true,
+        "mode" -> "get",
+        "count" -> found.size,
+        "messages" -> ujson.Arr.from(found.map: m =>
+          extend(
+            metaJson(m.message),
+            "session_id" -> ujson.Str(m.sessionId.toString),
+            "text" -> ujson.Str(m.text)
+          )),
+        "not_found" -> ujson.Arr.from(
+          distinct.filterNot(foundIds).map(id => ujson.Num(id.toDouble))
+        )
+      )
 
   private def scroll(
       search: SessionSearch,
       current: SessionId,
       sid: String,
-      mid: Int,
+      mid: Long,
       args: Args
   ): ujson.Obj =
     val parsed =
       try Some(SessionId(sid))
       catch case _: IllegalArgumentException => None
+    val fullText = args.full_text.getOrElse(false)
     parsed match
       case None                => err(s"invalid session id: $sid")
       case Some(_) if mid <= 0 =>
@@ -168,20 +237,21 @@ object SessionSearchTool:
       case Some(sessionId) if sessionId == current =>
         err("cannot scroll the current session; it is already in context.")
       case Some(sessionId) =>
-        search.scroll(sessionId, mid.toLong, clampWindow(args.window, 10)) match
+        val window = clampWindow(args.window, 10, MaxScrollWindow)
+        search.scroll(sessionId, mid, window, fullText) match
           case None    => err(s"no message $mid found in session $sid")
           case Some(w) =>
-            ujson.Obj(
-              "success" -> true,
-              "mode" -> "scroll",
-              "session_id" -> w.sessionId.toString,
-              "title" -> w.title,
-              "workdir" -> w.workdir,
-              "started_at" -> timeFmt.format(w.sessionCreatedAt),
-              "last_active" -> timeFmt.format(w.lastActivity),
-              "last_active_epoch_ms" -> w.lastActivity.toEpochMilli.toDouble,
-              "around_message_id" -> w.aroundMessageId.toDouble,
-              "messages" -> ujson.Arr.from(w.window.map(entryJson))
+            extend(
+              sessionJson(w.session),
+              "success" -> ujson.True,
+              "mode" -> ujson.Str("scroll"),
+              "around_message_id" -> ujson.Num(w.aroundMessageId.toDouble),
+              "full_text" -> ujson.Bool(fullText),
+              "messages" -> ujson.Arr.from(w.messages.map: m =>
+                val entry = metaJson(m.message)
+                entry("anchor") = m.message.id == w.aroundMessageId
+                m.text.foreach(t => entry("text") = t)
+                entry)
             )
 
   private def browse(
@@ -190,7 +260,7 @@ object SessionSearchTool:
       args: Args
   ): ujson.Obj =
     val sessions = search.browse(
-      limit = clampLimit(args.limit, 5),
+      limit = clamp(args.limit, 5, MaxBrowseLimit),
       offset = clampOffset(args.offset),
       excludeSession = Some(current)
     )
@@ -202,19 +272,28 @@ object SessionSearchTool:
     )
 
   private def hitJson(h: SessionHit): ujson.Obj =
+    val matchedIds = h.matches.map(_.message.id).toSet
+    extend(
+      sessionJson(h.session),
+      "matched_messages" -> ujson.Num(h.matchedMessages),
+      "matches" -> ujson.Arr.from(h.matches.map: m =>
+        extend(
+          metaJson(m.message),
+          "match_count" -> ujson.Num(m.matchCount),
+          "fragments" -> ujson.Arr.from(m.fragments),
+          "more_fragments" -> ujson.Num(m.moreFragments)
+        )),
+      "context" -> ujson.Arr.from(h.context.map: m =>
+        extend(metaJson(m), "matched" -> ujson.Bool(matchedIds(m.id))))
+    )
+
+  private def sessionJson(s: SessionInfo): ujson.Obj =
     ujson.Obj(
-      "session_id" -> h.sessionId.toString,
-      "title" -> h.title,
-      "workdir" -> h.workdir,
-      "started_at" -> timeFmt.format(h.sessionCreatedAt),
-      "last_active" -> timeFmt.format(h.lastActivity),
-      "last_active_epoch_ms" -> h.lastActivity.toEpochMilli.toDouble,
-      "match_message_id" -> h.matchMessageId.toDouble,
-      "matched_role" -> h.matchedRole,
-      "snippet" -> h.snippet,
-      "window" -> ujson.Arr.from(h.window.map(entryJson)),
-      "bookend_start" -> ujson.Arr.from(h.bookendStart.map(entryJson)),
-      "bookend_end" -> ujson.Arr.from(h.bookendEnd.map(entryJson))
+      "session_id" -> s.sessionId.toString,
+      "title" -> s.title,
+      "workdir" -> s.workdir,
+      "started_at" -> timeFmt.format(s.createdAt),
+      "last_active" -> timeFmt.format(s.lastActivity)
     )
 
   private def summaryJson(s: SessionSummary): ujson.Obj =
@@ -224,18 +303,23 @@ object SessionSearchTool:
       "workdir" -> s.workdir,
       "started_at" -> timeFmt.format(s.createdAt),
       "last_active" -> timeFmt.format(s.lastActivity),
-      "last_active_epoch_ms" -> s.lastActivity.toEpochMilli.toDouble,
       "message_count" -> s.messageCount
     )
 
-  private def entryJson(e: MessageEntry): ujson.Obj =
+  private def metaJson(m: MessageMeta): ujson.Obj =
     ujson.Obj(
-      "id" -> e.id.toDouble,
-      "role" -> e.role,
-      "text" -> e.text,
-      "when_epoch_ms" -> e.createdAt.toEpochMilli.toDouble,
-      "anchor" -> e.anchor
+      "id" -> m.id.toDouble,
+      "role" -> m.role,
+      "when" -> timeFmt.format(m.createdAt),
+      "length" -> m.length
     )
+
+  private def extend(
+      obj: ujson.Obj,
+      fields: (String, ujson.Value)*
+  ): ujson.Obj =
+    fields.foreach((k, v) => obj(k) = v)
+    obj
 
   private def err(message: String): ujson.Obj =
     ujson.Obj("success" -> false, "error" -> message)

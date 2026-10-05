@@ -2,10 +2,11 @@ package capybaraclaw.gateway.sqlite
 
 import capybaraclaw.gateway.{
   ContextProvider,
+  Discovery,
+  FullMessage,
   SearchSort,
   SearchTerms,
   SessionHandle,
-  SessionHit,
   SessionId,
   SessionMetadata,
   SessionSearch,
@@ -122,9 +123,9 @@ class SqliteContextProvider(
       window: Int,
       sort: SearchSort,
       excludeSession: Option[SessionId]
-  ): List[SessionHit] =
+  ): Discovery =
     FtsQuery.compile(terms) match
-      case None            => Nil
+      case None            => Discovery(0, Nil)
       case Some(matchExpr) =>
         readers.withReader: reader =>
           SessionSearchQueries.discover(
@@ -140,10 +141,24 @@ class SqliteContextProvider(
   def scroll(
       sessionId: SessionId,
       aroundMessageId: Long,
-      window: Int
+      window: Int,
+      fullText: Boolean
   ): Option[SessionWindow] =
     readers.withReader: reader =>
-      SessionSearchQueries.scroll(reader, sessionId, aroundMessageId, window)
+      SessionSearchQueries.scroll(
+        reader,
+        sessionId,
+        aroundMessageId,
+        window,
+        fullText
+      )
+
+  def get(
+      ids: List[Long],
+      excludeSession: Option[SessionId]
+  ): List[FullMessage] =
+    readers.withReader: reader =>
+      SessionSearchQueries.get(reader, ids, excludeSession)
 
   def browse(
       limit: Int,

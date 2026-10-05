@@ -6,10 +6,13 @@ enum SearchSort:
   case Rank, Newest, Oldest
 
 object SearchSort:
-  def fromString(s: String): SearchSort = s.trim.toLowerCase match
-    case "newest" => Newest
-    case "oldest" => Oldest
-    case _        => Rank
+  val names: String = "rank, newest or oldest"
+
+  def parse(s: String): Option[SearchSort] = s.trim.toLowerCase match
+    case "rank"   => Some(Rank)
+    case "newest" => Some(Newest)
+    case "oldest" => Some(Oldest)
+    case _        => None
 
 /** Structured full-text search intent.
   *
@@ -25,39 +28,59 @@ final case class SearchTerms(
     prefix: Boolean = false
 )
 
-/** A single message inside a context window. `anchor` marks the matched message. */
-final case class MessageEntry(
+/** A message without its text; `length` counts characters. */
+final case class MessageMeta(
     id: Long,
     role: String,
-    text: String,
     createdAt: Instant,
-    anchor: Boolean = false
+    length: Int
 )
 
-/** A discover result: one per session, anchored on its best-ranked match. */
+/** A matched message: each fragment shows a match with about
+  * [[SessionSearch.FragmentRadius]] characters on each side, matches marked
+  * `«like this»`. `moreFragments` counts the fragments left out.
+  */
+final case class MessageMatch(
+    message: MessageMeta,
+    matchCount: Int,
+    fragments: List[String],
+    moreFragments: Int
+)
+
+final case class SessionInfo(
+    sessionId: SessionId,
+    workdir: String,
+    title: String,
+    createdAt: Instant,
+    lastActivity: Instant
+)
+
+/** One session matching a search: its best-ranked matched messages, and the
+  * messages around the best one, without their text.
+  */
 final case class SessionHit(
-    sessionId: SessionId,
-    workdir: String,
-    title: String,
-    sessionCreatedAt: Instant,
-    lastActivity: Instant,
-    matchMessageId: Long,
-    matchedRole: String,
-    snippet: String,
-    window: List[MessageEntry],
-    bookendStart: List[MessageEntry],
-    bookendEnd: List[MessageEntry]
+    session: SessionInfo,
+    matchedMessages: Int,
+    matches: List[MessageMatch],
+    context: List[MessageMeta]
 )
 
-/** A scroll result: a window of messages around a given message id. */
+/** A page of matching sessions; `totalSessions` counts all of them. */
+final case class Discovery(totalSessions: Int, hits: List[SessionHit])
+
+/** A message in a scroll window; `text` is set only when asked for. */
+final case class WindowMessage(message: MessageMeta, text: Option[String])
+
 final case class SessionWindow(
-    sessionId: SessionId,
-    workdir: String,
-    title: String,
-    sessionCreatedAt: Instant,
-    lastActivity: Instant,
+    session: SessionInfo,
     aroundMessageId: Long,
-    window: List[MessageEntry]
+    messages: List[WindowMessage]
+)
+
+final case class FullMessage(
+    sessionId: SessionId,
+    message: MessageMeta,
+    text: String
 )
 
 /** A browse result: a recent-session summary. */
@@ -72,6 +95,11 @@ final case class SessionSummary(
 
 /** Read-model for full-text search over past sessions. Distinct from
   * [[ContextProvider]] (transcript persistence) by responsibility.
+  *
+  * Search results never carry whole messages, only fragments around the
+  * matches and the length of each message, so a long message cannot flood
+  * the context and nothing is cut off silently: the agent fetches the
+  * messages it needs whole with [[get]].
   */
 trait SessionSearch:
   def discover(
@@ -81,13 +109,19 @@ trait SessionSearch:
       window: Int,
       sort: SearchSort,
       excludeSession: Option[SessionId]
-  ): List[SessionHit]
+  ): Discovery
 
   def scroll(
       sessionId: SessionId,
       aroundMessageId: Long,
-      window: Int
+      window: Int,
+      fullText: Boolean
   ): Option[SessionWindow]
+
+  /** The messages with these ids, whole, in id order; ids not found or in
+    * `excludeSession` are left out.
+    */
+  def get(ids: List[Long], excludeSession: Option[SessionId]): List[FullMessage]
 
   def browse(
       limit: Int,
@@ -96,7 +130,16 @@ trait SessionSearch:
   ): List[SessionSummary]
 
 object SessionSearch:
-  /** No-op, used by the Gateway default factory and by tests. */
+  /** Characters shown on each side of a match. */
+  val FragmentRadius: Int = 200
+
+  /** How far a fragment edge may move outwards to reach a word boundary. */
+  val BoundarySlack: Int = 40
+
+  val FragmentsPerMessage: Int = 5
+  val MatchesPerSession: Int = 5
+
+  /** No-op, used by tests. */
   val empty: SessionSearch = new SessionSearch:
     def discover(
         terms: SearchTerms,
@@ -105,6 +148,7 @@ object SessionSearch:
         w: Int,
         s: SearchSort,
         ex: Option[SessionId]
-    ) = Nil
-    def scroll(id: SessionId, around: Long, w: Int) = None
+    ) = Discovery(0, Nil)
+    def scroll(id: SessionId, around: Long, w: Int, full: Boolean) = None
+    def get(ids: List[Long], ex: Option[SessionId]) = Nil
     def browse(l: Int, o: Int, ex: Option[SessionId]) = Nil
