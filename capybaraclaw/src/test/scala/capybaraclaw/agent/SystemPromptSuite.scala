@@ -46,7 +46,7 @@ class SystemPromptSuite extends munit.FunSuite:
       provider = Provider.OpenRouter,
       model = "test/model",
       classifiedPaths = List("secret/"),
-      memorySnapshot = MemorySnapshot("memory marker", "user marker")
+      memorySnapshot = SystemPromptSuite.snapshot
     )
 
     val expected =
@@ -60,22 +60,52 @@ class SystemPromptSuite extends munit.FunSuite:
         """<project_instructions>
           |Be concise.
           |</project_instructions>""".stripMargin +
-        "\n\n" +
-        SystemPromptSuite.memorySection(config.memorySnapshot)
+        "\n\n"
 
-    assertEquals(SystemPrompt.build(config), expected)
+    val built = SystemPrompt.build(config)
+    assert(built.startsWith(expected), built)
+    val boundary = SystemPromptSuite.boundaryOf(built)
+    assertEquals(
+      built.stripPrefix(expected),
+      SystemPrompt.renderMemory(config.memorySnapshot, boundary)
+    )
 
-  workDir.test(
-    "build emits the system and memory sections without config or CLAW.md"
-  ): dir =>
+  workDir.test("build emits only the system section without memory"): dir =>
     val config = AgentConfig(workDir = dir.toString)
+    assertEquals(
+      SystemPrompt.build(config),
+      SystemPromptSuite.systemSection(config)
+    )
 
-    val expected =
-      SystemPromptSuite.systemSection(config) +
-        "\n\n" +
-        SystemPromptSuite.memorySection(config.memorySnapshot)
+  test("renderMemory fences every section and marks read-only ones"):
+    val rendered = SystemPrompt.renderMemory(SystemPromptSuite.snapshot, "b0")
+    assert(rendered.contains("This is a test conversation."), rendered)
+    assert(
+      rendered.contains(
+        """<memory target="private" visible="test notes" access="read-write" usage="0%" chars="13/2200" boundary="b0">
+          |memory marker
+          |</memory boundary="b0">""".stripMargin
+      ),
+      rendered
+    )
+    assert(
+      rendered.contains(
+        """<memory target="public" visible="everyone" access="read-only" usage="0%" chars="0/2200" boundary="b0">
+          |(empty)
+          |</memory boundary="b0">""".stripMargin
+      ),
+      rendered
+    )
 
-    assertEquals(SystemPrompt.build(config), expected)
+  workDir.test("every prompt gets a fresh memory boundary"): dir =>
+    val config = AgentConfig(
+      workDir = dir.toString,
+      memorySnapshot = SystemPromptSuite.snapshot
+    )
+    val first = SystemPromptSuite.boundaryOf(SystemPrompt.build(config))
+    val second = SystemPromptSuite.boundaryOf(SystemPrompt.build(config))
+    assertNotEquals(first, second)
+    assert(first.matches("[0-9a-f]{16}"), first)
 
 object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
@@ -87,22 +117,20 @@ object SystemPromptSuite:
       )
     )
 
-  private def memorySection(snap: MemorySnapshot): String =
-    SystemPrompt.renderResource(
-      "prompts/memory.md",
-      Map(
-        "memory_usage" -> snap.memoryPct.toString,
-        "memory_chars" -> snap.memoryChars.toString,
-        "memory_capacity" -> MemoryFile.Memory.capacity.toString,
-        "memory_content" ->
-          Option.when(snap.memory.nonEmpty)(snap.memory).getOrElse("(empty)"),
-        "user_usage" -> snap.userPct.toString,
-        "user_chars" -> snap.userChars.toString,
-        "user_capacity" -> MemoryFile.User.capacity.toString,
-        "user_content" ->
-          Option.when(snap.user.nonEmpty)(snap.user).getOrElse("(empty)")
-      )
+  private val snapshot: MemorySnapshot = MemorySnapshot(
+    "a test conversation",
+    List(
+      MemorySection(MemoryFile.User, "test profile", true, "user marker"),
+      MemorySection(MemoryFile.Private, "test notes", true, "memory marker"),
+      MemorySection(MemoryFile.Public, "everyone", false, "")
     )
+  )
+
+  private def boundaryOf(prompt: String): String =
+    raw"""boundary="([0-9a-f]+)"""".r
+      .findFirstMatchIn(prompt)
+      .map(_.group(1).nn)
+      .getOrElse(throw AssertionError(s"no boundary in: $prompt"))
 
   private def interfaceSource: String =
     try

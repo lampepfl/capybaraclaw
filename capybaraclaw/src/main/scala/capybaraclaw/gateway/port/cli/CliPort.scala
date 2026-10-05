@@ -1,8 +1,9 @@
 package capybaraclaw.gateway.port.cli
 
-import capybaraclaw.agent.{AgentConfig, MemoryFile, MemoryStore}
+import capybaraclaw.agent.{AgentConfig, MemoryAccess}
 import capybaraclaw.gateway.{
   ContextProvider,
+  Conversation,
   GatewayMessage,
   Origin,
   PortId,
@@ -48,11 +49,11 @@ import tacit.agents.llm.endpoint.Role as MessageRole
 /** Runner for [[CliTransitions]] backed by jline. */
 class CliPort(
     override val id: PortId = CliPort.Id,
-    user: UserId = UserId(sys.env.getOrElse("USER", "cli")),
+    user: UserId = CliPort.defaultUser,
     workDirFile: File = java.io.File(".").getCanonicalFile,
     sessionId: SessionId,
     contextProvider: ContextProvider,
-    memoryStore: MemoryStore
+    memory: MemoryAccess
 ) extends Port:
   import CliPort.*
   import CliTransitions.*
@@ -63,7 +64,7 @@ class CliPort(
   private val inputReadPermits = UnboundedChannel[Unit]()
   private val shutdownPromise: Future.Promise[Unit] = Future.Promise[Unit]()
   private val agentConfig =
-    AgentConfig.load(workDirFile.getPath, memoryStore.snapshot())
+    AgentConfig.load(workDirFile.getPath, memory.snapshot())
 
   private val (terminal: Terminal, terminalOwnsStdio: Boolean) =
     buildTerminal()
@@ -105,6 +106,9 @@ class CliPort(
             runEventLoop(RuntimeState.initial).state
         printGoodbye(finalState.turnCount)
       finally cleanup()
+
+  override def conversation(origin: Origin): Conversation =
+    Conversation.Direct
 
   override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
     new ReplyStream:
@@ -316,8 +320,11 @@ class CliPort(
         rowTight(" model:     ".style(Style.Dim), agentConfig.model),
         rowTight(
           " memory:    ".style(Style.Dim),
-          s"${snap.memoryPct}% (${snap.memoryChars}/${MemoryFile.Memory.capacity}), " +
-            s"user ${snap.userPct}% (${snap.userChars}/${MemoryFile.User.capacity})"
+          snap.sections
+            .map(s =>
+              s"${s.file.target} ${s.pct}% (${s.chars}/${s.file.capacity})"
+            )
+            .mkString(", ")
         ),
         rowTight(" session:   ".style(Style.Dim), sessionId.toString),
         rowTight(" directory: ".style(Style.Dim), tildify(workDirFile.getPath))
@@ -435,6 +442,9 @@ class CliPort(
 
 object CliPort:
   val Id: PortId = PortId("cli")
+
+  /** The local account running claw. */
+  def defaultUser: UserId = UserId(sys.env.getOrElse("USER", "cli"))
   val SpinnerIntervalMs: Long = 100L
   val InputReadFailureBackoffMs: Long = 500L
 

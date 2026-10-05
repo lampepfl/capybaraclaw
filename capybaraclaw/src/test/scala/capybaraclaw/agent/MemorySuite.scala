@@ -37,17 +37,29 @@ class MemorySuite extends munit.FunSuite:
     os.write.over(base(store) / f.fileName, content)
 
   private def driftFile(store: MemoryStore, content: String): Unit =
-    writeRaw(store, MemoryFile.Memory, content)
+    writeRaw(store, MemoryFile.Private, content)
 
   private def memBackups(store: MemoryStore): List[String] =
     val dir = base(store)
-    val prefix = s"${MemoryFile.Memory.fileName}.bak."
+    val prefix = s"${MemoryFile.Private.fileName}.bak."
     if os.exists(dir) then
       os.list(dir).map(_.last).filter(_.startsWith(prefix)).toList
     else Nil
 
+  private def accessOf(store: MemoryStore): MemoryAccess =
+    MemoryAccess(
+      "a test conversation",
+      List(
+        MemoryScope(MemoryFile.User, store, "test profile"),
+        MemoryScope(MemoryFile.Private, store, "test notes")
+      )
+    )
+
+  private def section(store: MemoryStore, f: MemoryFile): MemorySection =
+    accessOf(store).snapshot().sections.find(_.file == f).get
+
   private def runTool(store: MemoryStore, args: MemoryTool.Args): ujson.Value =
-    ujson.read(MemoryTool.run(store, args))
+    ujson.read(MemoryTool.run(accessOf(store), args))
 
   private def concurrently[A](n: Int, threads: Int)(task: Int => A): List[A] =
     val pool = Executors.newFixedThreadPool(threads)
@@ -72,19 +84,19 @@ class MemorySuite extends munit.FunSuite:
 
   test("add on empty file writes the entry verbatim"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "first note"))
-    assertEquals(store.read(MemoryFile.Memory), "first note")
+    assertSuccess(store.add(MemoryFile.Private, "first note"))
+    assertEquals(store.read(MemoryFile.Private), "first note")
 
   test("add appends entries with the section separator"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "first"))
-    assertSuccess(store.add(MemoryFile.Memory, "second"))
-    assertEquals(store.read(MemoryFile.Memory), "first\n§\nsecond")
+    assertSuccess(store.add(MemoryFile.Private, "first"))
+    assertSuccess(store.add(MemoryFile.Private, "second"))
+    assertEquals(store.read(MemoryFile.Private), "first\n§\nsecond")
 
   test("add returns success without persisting an exact duplicate"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "same"))
-    val result = store.add(MemoryFile.Memory, "same")
+    assertSuccess(store.add(MemoryFile.Private, "same"))
+    val result = store.add(MemoryFile.Private, "same")
     assertSuccess(result)
     assert(result("message").str.contains("no duplicate"), result.render())
     assertEquals(entries(result), List("same"))
@@ -106,15 +118,15 @@ class MemorySuite extends munit.FunSuite:
 
   test("replace replaces the complete entry identified by a substring"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "alpha beta gamma"))
-    assertSuccess(store.replace(MemoryFile.Memory, "beta", "replacement"))
-    assertEquals(store.read(MemoryFile.Memory), "replacement")
+    assertSuccess(store.add(MemoryFile.Private, "alpha beta gamma"))
+    assertSuccess(store.replace(MemoryFile.Private, "beta", "replacement"))
+    assertEquals(store.read(MemoryFile.Private), "replacement")
 
   test("replace refuses a substring matching multiple entries"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "foo first"))
-    assertSuccess(store.add(MemoryFile.Memory, "foo second"))
-    val result = store.replace(MemoryFile.Memory, "foo", "replacement")
+    assertSuccess(store.add(MemoryFile.Private, "foo first"))
+    assertSuccess(store.add(MemoryFile.Private, "foo second"))
+    val result = store.replace(MemoryFile.Private, "foo", "replacement")
     assertFailure(result)
     assert(result("error").str.contains("Multiple entries"), result.render())
 
@@ -138,36 +150,32 @@ class MemorySuite extends munit.FunSuite:
 
   test("remove deletes the complete entry identified by a substring"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "one"))
-    assertSuccess(store.add(MemoryFile.Memory, "keep no fragment of two"))
-    assertSuccess(store.add(MemoryFile.Memory, "three"))
-    assertSuccess(store.remove(MemoryFile.Memory, "fragment of two"))
-    assertEquals(store.read(MemoryFile.Memory), "one\n§\nthree")
+    assertSuccess(store.add(MemoryFile.Private, "one"))
+    assertSuccess(store.add(MemoryFile.Private, "keep no fragment of two"))
+    assertSuccess(store.add(MemoryFile.Private, "three"))
+    assertSuccess(store.remove(MemoryFile.Private, "fragment of two"))
+    assertEquals(store.read(MemoryFile.Private), "one\n§\nthree")
 
   test("snapshot normalizes and deduplicates entries"):
     val store = freshStore()
     driftFile(store, "one\n§\none")
-    val snapshot = store.snapshot()
-    assertEquals(snapshot.memory, "one")
-    assertEquals(snapshot.userPct, 0)
+    assertEquals(section(store, MemoryFile.Private).content, "one")
+    assertEquals(section(store, MemoryFile.User).pct, 0)
 
   test("snapshot reports usage percentages"):
     val store = freshStore()
     assertSuccess(
-      store.add(MemoryFile.Memory, "x" * (MemoryFile.Memory.capacity / 2))
+      store.add(MemoryFile.Private, "x" * (MemoryFile.Private.capacity / 2))
     )
-    val snapshot = store.snapshot()
-    assert(
-      snapshot.memoryPct >= 49 && snapshot.memoryPct <= 51,
-      s"got ${snapshot.memoryPct}%"
-    )
+    val pct = section(store, MemoryFile.Private).pct
+    assert(pct >= 49 && pct <= 51, s"got $pct%")
 
   test(
     "mutation refuses non-roundtripping external drift and creates a backup"
   ):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    val result = store.add(MemoryFile.Memory, "new")
+    val result = store.add(MemoryFile.Private, "new")
     assertFailure(result)
     assert(result("error").str.contains("Refusing to write"), result.render())
     assert(
@@ -175,47 +183,47 @@ class MemorySuite extends munit.FunSuite:
       result.render()
     )
     assertEquals(memBackups(store).size, 1)
-    assertEquals(store.read(MemoryFile.Memory), "manually edited \n§\nkept")
+    assertEquals(store.read(MemoryFile.Private), "manually edited \n§\nkept")
 
   test("repeated mutations against unchanged drift reuse one backup"):
     val store = freshStore()
     driftFile(store, "manual \n§\ncontent")
-    val first = store.add(MemoryFile.Memory, "first")
-    val second = store.add(MemoryFile.Memory, "second")
+    val first = store.add(MemoryFile.Private, "first")
+    val second = store.add(MemoryFile.Private, "second")
     assertEquals(first("drift_backup").str, second("drift_backup").str)
     assertEquals(memBackups(store).size, 1)
 
   test("a successful write deletes backups whose content is now subsumed"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    assertFailure(store.add(MemoryFile.Memory, "new"))
+    assertFailure(store.add(MemoryFile.Private, "new"))
     driftFile(store, "manually edited\n§\nkept")
-    assertSuccess(store.add(MemoryFile.Memory, "new"))
+    assertSuccess(store.add(MemoryFile.Private, "new"))
     assertEquals(memBackups(store), Nil)
 
   test("a successful write keeps backups whose content is not subsumed"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    assertFailure(store.add(MemoryFile.Memory, "new"))
+    assertFailure(store.add(MemoryFile.Private, "new"))
     driftFile(store, "totally different")
-    assertSuccess(store.add(MemoryFile.Memory, "new"))
+    assertSuccess(store.add(MemoryFile.Private, "new"))
     assertEquals(memBackups(store).size, 1)
 
   test("reading a missing store does not create its base directory"):
     val absent = tmpRoot / s"missing-${java.util.UUID.randomUUID()}"
     val store = MemoryStore(absent.toIO)
-    assertEquals(store.snapshot(), MemorySnapshot.empty)
+    assert(accessOf(store).snapshot().sections.forall(_.content.isEmpty))
     assert(
       !os.exists(absent),
       "read-only snapshot should not create the directory"
     )
-    assertSuccess(store.add(MemoryFile.Memory, "created by mutation"))
+    assertSuccess(store.add(MemoryFile.Private, "created by mutation"))
     assert(os.exists(absent), "a mutation should create the store directory")
 
   test("MemoryTool.run dispatches add and returns live JSON state"):
     val result = runTool(
       freshStore(),
-      MemoryTool.Args("add", "memory", content = Some("via tool"))
+      MemoryTool.Args("add", "private", content = Some("via tool"))
     )
     assert(result("success").bool, result.render())
     assertEquals(result("entries").arr.toList.map(_.str), List("via tool"))
@@ -223,19 +231,19 @@ class MemorySuite extends munit.FunSuite:
   test("MemoryTool.run rejects unknown action"):
     val result = runTool(
       freshStore(),
-      MemoryTool.Args("wipe", "memory", content = Some("x"))
+      MemoryTool.Args("wipe", "private", content = Some("x"))
     )
     assert(!result("success").bool, result.render())
 
   test("concurrent adds on the same file all land"):
     val store = freshStore()
     val results =
-      concurrently(32, 8)(i => store.add(MemoryFile.Memory, s"entry-$i"))
+      concurrently(32, 8)(i => store.add(MemoryFile.Private, s"entry-$i"))
     assert(
       results.forall(_("success").bool),
       results.map(_.render()).mkString("\n")
     )
-    assertAllPresent(store.read(MemoryFile.Memory), 32, "entry-")
+    assertAllPresent(store.read(MemoryFile.Private), 32, "entry-")
 
   test("two stores on the same directory do not lose updates"):
     val dir = os.temp.dir(tmpRoot, prefix = "shared-").toIO
@@ -243,17 +251,17 @@ class MemorySuite extends munit.FunSuite:
     val storeB = MemoryStore(dir)
     val results = concurrently(40, 8): i =>
       (if i % 2 == 0 then storeA else storeB)
-        .add(MemoryFile.Memory, s"shared-$i")
+        .add(MemoryFile.Private, s"shared-$i")
     assert(
       results.forall(_("success").bool),
       results.map(_.render()).mkString("\n")
     )
-    assertAllPresent(MemoryStore(dir).read(MemoryFile.Memory), 40, "shared-")
+    assertAllPresent(MemoryStore(dir).read(MemoryFile.Private), 40, "shared-")
 
   test("write creates and releases the lock file"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "first"))
-    val lockFile = base(store) / s"${MemoryFile.Memory.fileName}.lock"
+    assertSuccess(store.add(MemoryFile.Private, "first"))
+    val lockFile = base(store) / s"${MemoryFile.Private.fileName}.lock"
     assert(os.exists(lockFile), "expected MEMORY.md.lock to be created")
     val userLock = base(store) / s"${MemoryFile.User.fileName}.lock"
     assert(
@@ -282,34 +290,34 @@ class MemorySuite extends munit.FunSuite:
 
   test("add rejects content containing a line that is only §"):
     val store = freshStore()
-    val result = store.add(MemoryFile.Memory, "before\n§\nafter")
+    val result = store.add(MemoryFile.Private, "before\n§\nafter")
     assertFailure(result)
     assert(result("error").str.contains("separator"), result.render())
-    assertEquals(store.read(MemoryFile.Memory), "")
+    assertEquals(store.read(MemoryFile.Private), "")
 
   test("add allows § inline within a line"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "costs 5§ per unit"))
-    assertEquals(store.read(MemoryFile.Memory), "costs 5§ per unit")
+    assertSuccess(store.add(MemoryFile.Private, "costs 5§ per unit"))
+    assertEquals(store.read(MemoryFile.Private), "costs 5§ per unit")
 
   test("add stores angle brackets and reserved tags verbatim (no guard)"):
     val store = freshStore()
     assertSuccess(
-      store.add(MemoryFile.Memory, "increased memory usage when a < b")
+      store.add(MemoryFile.Private, "increased memory usage when a < b")
     )
     assertSuccess(
-      store.add(MemoryFile.Memory, "note </memory> and <user_profile>")
+      store.add(MemoryFile.Private, "note </memory> and <user_profile>")
     )
     assertEquals(
-      store.read(MemoryFile.Memory),
+      store.read(MemoryFile.Private),
       "increased memory usage when a < b\n§\nnote </memory> and <user_profile>"
     )
 
   test("read returns content without locking (no lock file created)"):
     val store = freshStore()
     driftFile(store, "unlocked read")
-    assertEquals(store.read(MemoryFile.Memory), "unlocked read")
-    val lockFile = base(store) / s"${MemoryFile.Memory.fileName}.lock"
+    assertEquals(store.read(MemoryFile.Private), "unlocked read")
+    val lockFile = base(store) / s"${MemoryFile.Private.fileName}.lock"
     assert(!os.exists(lockFile), "a read must not create the lock file")
 
   test("replace refuses when the replacement would exceed the cap"):
@@ -331,11 +339,11 @@ class MemorySuite extends munit.FunSuite:
     "an I/O failure during a mutation returns a structured error, not an exception"
   ):
     val store = freshStore()
-    os.makeDir.all(base(store) / MemoryFile.Memory.fileName)
-    val result = store.add(MemoryFile.Memory, "data")
+    os.makeDir.all(base(store) / MemoryFile.Private.fileName)
+    val result = store.add(MemoryFile.Private, "data")
     assertFailure(result)
     assert(
-      result("error").str.contains(MemoryFile.Memory.fileName),
+      result("error").str.contains(MemoryFile.Private.fileName),
       result.render()
     )
 
@@ -354,24 +362,24 @@ class MemorySuite extends munit.FunSuite:
     "replace into content equal to another entry collapses instead of wedging the store"
   ):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "alpha"))
-    assertSuccess(store.add(MemoryFile.Memory, "beta"))
-    assertSuccess(store.replace(MemoryFile.Memory, "alpha", "beta"))
-    assertEquals(store.read(MemoryFile.Memory), "beta")
-    assertSuccess(store.add(MemoryFile.Memory, "gamma"))
-    assertEquals(store.read(MemoryFile.Memory), "beta\n§\ngamma")
+    assertSuccess(store.add(MemoryFile.Private, "alpha"))
+    assertSuccess(store.add(MemoryFile.Private, "beta"))
+    assertSuccess(store.replace(MemoryFile.Private, "alpha", "beta"))
+    assertEquals(store.read(MemoryFile.Private), "beta")
+    assertSuccess(store.add(MemoryFile.Private, "gamma"))
+    assertEquals(store.read(MemoryFile.Private), "beta\n§\ngamma")
     assertEquals(memBackups(store), Nil)
 
   test("snapshot on an unreadable store degrades to empty instead of throwing"):
     val store = freshStore()
-    os.makeDir.all(base(store) / MemoryFile.Memory.fileName)
-    assertEquals(store.snapshot(), MemorySnapshot.empty)
+    os.makeDir.all(base(store) / MemoryFile.Private.fileName)
+    assert(accessOf(store).snapshot().sections.forall(_.content.isEmpty))
 
   test("read returns raw, parsed entries, and no drift for a clean file"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "alpha"))
-    assertSuccess(store.add(MemoryFile.Memory, "beta"))
-    val result = store.inspect(MemoryFile.Memory)
+    assertSuccess(store.add(MemoryFile.Private, "alpha"))
+    assertSuccess(store.add(MemoryFile.Private, "beta"))
+    val result = store.inspect(MemoryFile.Private)
     assertSuccess(result)
     assert(!result("drift").bool, result.render())
     assertEquals(entries(result), List("alpha", "beta"))
@@ -381,7 +389,7 @@ class MemorySuite extends munit.FunSuite:
   test("read on a drifted file flags drift and surfaces the backup inline"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    val result = store.inspect(MemoryFile.Memory)
+    val result = store.inspect(MemoryFile.Private)
     assertSuccess(result)
     assert(result("drift").bool, result.render())
     val backups = result("backups").arr.toList
@@ -391,24 +399,24 @@ class MemorySuite extends munit.FunSuite:
 
   test("reconcile refuses a file that is not in drift"):
     val store = freshStore()
-    assertSuccess(store.add(MemoryFile.Memory, "alpha"))
-    val result = store.reconcile(MemoryFile.Memory, "alpha\n§\nbeta")
+    assertSuccess(store.add(MemoryFile.Private, "alpha"))
+    val result = store.reconcile(MemoryFile.Private, "alpha\n§\nbeta")
     assertFailure(result)
     assert(result("error").str.contains("No drift"), result.render())
-    assertEquals(store.read(MemoryFile.Memory), "alpha")
+    assertEquals(store.read(MemoryFile.Private), "alpha")
 
   test("reconcile repairs a drifted file and un-wedges the store"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
     val result =
-      store.reconcile(MemoryFile.Memory, "manually edited\n§\nkept\n§\nnew")
+      store.reconcile(MemoryFile.Private, "manually edited\n§\nkept\n§\nnew")
     assertSuccess(result)
     assertEquals(result("message").str, "Reconciled.")
     assertEquals(
-      store.read(MemoryFile.Memory),
+      store.read(MemoryFile.Private),
       "manually edited\n§\nkept\n§\nnew"
     )
-    assertSuccess(store.add(MemoryFile.Memory, "after"))
+    assertSuccess(store.add(MemoryFile.Private, "after"))
 
   List(
     "a trailing separator line" -> "alpha\n§\nUse § as a divider, e.g.\n§",
@@ -418,21 +426,21 @@ class MemorySuite extends munit.FunSuite:
     test(s"reconcile refuses an entry with $label"):
       val store = freshStore()
       driftFile(store, "manual\n\n§\n\nedit")
-      val result = store.reconcile(MemoryFile.Memory, content)
+      val result = store.reconcile(MemoryFile.Private, content)
       assertFailure(result)
       assert(result("error").str.contains("just '§'"), result.render())
-      assertEquals(store.read(MemoryFile.Memory), "manual\n\n§\n\nedit")
+      assertEquals(store.read(MemoryFile.Private), "manual\n\n§\n\nedit")
 
   test("an entry ending in '§' cannot regroup a later add"):
     val store = freshStore()
     driftFile(store, "manual\n\n§\n\nedit")
     assertFailure(
-      store.reconcile(MemoryFile.Memory, "alpha\n§\nUse § as a divider\n§")
+      store.reconcile(MemoryFile.Private, "alpha\n§\nUse § as a divider\n§")
     )
-    assertSuccess(store.reconcile(MemoryFile.Memory, "alpha\n§\nUse §, e.g."))
-    assertSuccess(store.add(MemoryFile.Memory, "beta"))
+    assertSuccess(store.reconcile(MemoryFile.Private, "alpha\n§\nUse §, e.g."))
+    assertSuccess(store.add(MemoryFile.Private, "beta"))
     assertEquals(
-      store.entries(MemoryFile.Memory),
+      store.entries(MemoryFile.Private),
       List("alpha", "Use §, e.g.", "beta")
     )
 
@@ -449,25 +457,25 @@ class MemorySuite extends munit.FunSuite:
   test("reconcile drops a backup whose entries it integrated"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    store.inspect(MemoryFile.Memory)
+    store.inspect(MemoryFile.Private)
     assertSuccess(
-      store.reconcile(MemoryFile.Memory, "manually edited\n§\nkept")
+      store.reconcile(MemoryFile.Private, "manually edited\n§\nkept")
     )
     assertEquals(memBackups(store), Nil)
 
   test("reconcile keeps a backup whose entries it did not integrate"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    store.inspect(MemoryFile.Memory)
-    assertSuccess(store.reconcile(MemoryFile.Memory, "totally different"))
+    store.inspect(MemoryFile.Private)
+    assertSuccess(store.reconcile(MemoryFile.Private, "totally different"))
     assertEquals(memBackups(store).size, 1)
 
   test("reconcile with empty content clears the file but keeps the backup"):
     val store = freshStore()
     driftFile(store, "manually edited \n§\nkept")
-    store.inspect(MemoryFile.Memory)
-    assertSuccess(store.reconcile(MemoryFile.Memory, ""))
-    assertEquals(store.read(MemoryFile.Memory), "")
+    store.inspect(MemoryFile.Private)
+    assertSuccess(store.reconcile(MemoryFile.Private, ""))
+    assertEquals(store.read(MemoryFile.Private), "")
     assertEquals(memBackups(store).size, 1)
 
   test("MemoryTool.run drives the full drift recovery: add → read → reconcile"):
@@ -475,11 +483,11 @@ class MemorySuite extends munit.FunSuite:
     driftFile(store, "manually edited \n§\nkept")
 
     val blocked =
-      runTool(store, MemoryTool.Args("add", "memory", content = Some("new")))
+      runTool(store, MemoryTool.Args("add", "private", content = Some("new")))
     assert(!blocked("success").bool, blocked.render())
     assert(blocked.obj.contains("drift_backup"), blocked.render())
 
-    val read = runTool(store, MemoryTool.Args("read", "memory"))
+    val read = runTool(store, MemoryTool.Args("read", "private"))
     assert(read("success").bool, read.render())
     assert(read("drift").bool, read.render())
     assert(read("backups").arr.nonEmpty, read.render())
@@ -488,16 +496,16 @@ class MemorySuite extends munit.FunSuite:
       store,
       MemoryTool.Args(
         "reconcile",
-        "memory",
+        "private",
         content = Some("manually edited\n§\nkept")
       )
     )
     assert(repaired("success").bool, repaired.render())
 
     val added =
-      runTool(store, MemoryTool.Args("add", "memory", content = Some("new")))
+      runTool(store, MemoryTool.Args("add", "private", content = Some("new")))
     assert(added("success").bool, added.render())
 
   test("MemoryTool.run reconcile requires the content field"):
-    val result = runTool(freshStore(), MemoryTool.Args("reconcile", "memory"))
+    val result = runTool(freshStore(), MemoryTool.Args("reconcile", "private"))
     assert(!result("success").bool, result.render())

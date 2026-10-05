@@ -40,27 +40,38 @@ private[agent] object SystemPrompt:
           "prompts/project-instructions.md",
           Map("instructions" -> md)
         ),
-      Some(renderMemory(config.memorySnapshot))
+      Option.when(config.memorySnapshot.sections.nonEmpty):
+        renderMemory(config.memorySnapshot, freshBoundary())
     ).flatten
 
     sections.mkString("\n\n")
 
-  private def renderMemory(snap: MemorySnapshot): String =
+  /** `boundary` fences each memory block: it is fresh for every prompt, so a
+    * stored entry cannot guess it to end its block early and pose as prompt.
+    */
+  private[agent] def renderMemory(
+      snap: MemorySnapshot,
+      boundary: String
+  ): String =
+    val blocks = snap.sections.map: s =>
+      val access = if s.writable then "read-write" else "read-only"
+      val content = if s.content.nonEmpty then s.content else "(empty)"
+      s"""<memory target="${s.file.target}" visible="${s.about}" access="$access" usage="${s.pct}%" chars="${s.chars}/${s.file.capacity}" boundary="$boundary">
+         |$content
+         |</memory boundary="$boundary">""".stripMargin
     renderResource(
       "prompts/memory.md",
       Map(
-        "memory_usage" -> snap.memoryPct.toString,
-        "memory_chars" -> snap.memoryChars.toString,
-        "memory_capacity" -> MemoryFile.Memory.capacity.toString,
-        "memory_content" ->
-          Option.when(snap.memory.nonEmpty)(snap.memory).getOrElse("(empty)"),
-        "user_usage" -> snap.userPct.toString,
-        "user_chars" -> snap.userChars.toString,
-        "user_capacity" -> MemoryFile.User.capacity.toString,
-        "user_content" ->
-          Option.when(snap.user.nonEmpty)(snap.user).getOrElse("(empty)")
+        "conversation" -> snap.conversation,
+        "boundary" -> boundary,
+        "memory_blocks" -> blocks.mkString("\n\n")
       )
     )
+
+  private def freshBoundary(): String =
+    val bytes = Array.ofDim[Byte](8)
+    java.security.SecureRandom().nextBytes(bytes)
+    java.util.HexFormat.of().formatHex(bytes)
 
   private[agent] def renderResource(
       path: String,

@@ -2,8 +2,15 @@ package capybaraclaw
 
 import caseapp.*
 
-import capybaraclaw.agent.{ClawAgent, ConfigError, MemoryStore}
-import capybaraclaw.gateway.{Gateway, SessionId, SessionMetadata}
+import capybaraclaw.agent.{ClawAgent, ConfigError}
+import capybaraclaw.gateway.{
+  Conversation,
+  Gateway,
+  Identities,
+  MemoryDirectory,
+  SessionId,
+  SessionMetadata
+}
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.{CliPort, SessionFormatting}
 import capybaraclaw.gateway.port.slack.{SlackBot, SlackPort}
@@ -83,7 +90,9 @@ private object ClawMain extends CaseApp[CliOptions]:
         val (sessionId, workDirFile) =
           bootstrapSession(contextProvider, options, remainingArgs)
         val workDir = workDirFile.getPath
-        val memoryStore = MemoryStore.default()
+        val memory = MemoryDirectory.default(Identities.default())
+        val cliUser = CliPort.defaultUser
+        memory.migrateLegacy(memory.person(CliPort.Id, cliUser))
 
         Async.blocking:
           val slackPort: Option[SlackPort] =
@@ -97,7 +106,8 @@ private object ClawMain extends CaseApp[CliOptions]:
               workDirFile = workDirFile,
               sessionId = sessionId,
               contextProvider = contextProvider,
-              memoryStore = memoryStore
+              user = cliUser,
+              memory = memory.access(CliPort.Id, cliUser, Conversation.Direct)
             )
           )
           val ports: List[Port] = slackPort.toList :+ cli
@@ -105,8 +115,9 @@ private object ClawMain extends CaseApp[CliOptions]:
             workDir,
             ports,
             contextProvider,
-            clawFactory = (wd, hist) =>
-              ClawAgent(wd, initialMessages = hist, memoryStore = memoryStore)
+            memory,
+            clawFactory = (wd, hist, access) =>
+              ClawAgent(wd, initialMessages = hist, memory = access)
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())

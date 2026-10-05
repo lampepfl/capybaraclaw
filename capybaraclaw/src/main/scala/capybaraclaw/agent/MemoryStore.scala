@@ -47,14 +47,11 @@ final class MemoryStore(val baseDir: File):
     parseEntries(read(f)).distinct
 
   /** @return
-    *   a [[MemorySnapshot]] of both memory files (normalized and deduplicated),
-    *   used to render the session-start system-prompt block.
+    *   `entries` joined with the on-disk separator, as shown in the
+    *   session-start system prompt.
     */
-  def snapshot(): MemorySnapshot =
-    MemorySnapshot(
-      renderEntries(entries(MemoryFile.Memory)),
-      renderEntries(entries(MemoryFile.User))
-    )
+  private[agent] def render(entries: List[String]): String =
+    renderEntries(entries)
 
   /** Append `content` as a new entry.
     *
@@ -462,8 +459,3 @@ final class MemoryStore(val baseDir: File):
 
 object MemoryStore:
   private val EntryDelimiter = "\n§\n"
-
-  /** Default location: `~/.claw/memories/`. */
-  def default(): MemoryStore =
-    val home = System.getProperty("user.home")
-    MemoryStore(File(home, ".claw/memories"))
