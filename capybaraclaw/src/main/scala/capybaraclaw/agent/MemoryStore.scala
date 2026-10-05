@@ -223,7 +223,16 @@ final class MemoryStore(val baseDir: File):
         else
           val entries = parseEntries(content).distinct
           val projected = charCount(entries)
-          if projected > f.capacity then
+          val withSeparator = entries.filter(containsDelimiterLine)
+          if withSeparator.nonEmpty then
+            failure(
+              s"""An entry contains a line that is just '§' (possibly with spaces),
+                 |which would be read back as a separator:
+                 |${withSeparator.map(e => s"- ${e.take(80)}").mkString("\n")}
+                 |Separate entries with a line containing only '§' and no spaces,
+                 |and make sure no entry starts or ends with such a line.""".stripMargin
+            )
+          else if projected > f.capacity then
             capExceeded(
               f,
               entries,
@@ -231,8 +240,7 @@ final class MemoryStore(val baseDir: File):
                  |Drop or shorten entries first.""".stripMargin
             )
           else
-            writeAtomic(f, renderEntries(entries))
-            cleanupSubsumedBackups(f, entries)
+            persist(f, entries)
             success(f, entries, "Reconciled.")
     catch
       case NonFatal(e) =>
@@ -279,8 +287,7 @@ final class MemoryStore(val baseDir: File):
             update(current) match
               case Left(result)             => result
               case Right((updated, result)) =>
-                writeAtomic(f, renderEntries(updated))
-                cleanupSubsumedBackups(f, updated)
+                persist(f, updated)
                 result
     catch
       case NonFatal(e) =>
@@ -373,6 +380,19 @@ final class MemoryStore(val baseDir: File):
   private def readRaw(f: MemoryFile): String =
     val path = targetPath(f)
     if os.exists(path) then os.read(path) else ""
+
+  /** Write `entries` and garbage-collect reconciled backups, refusing to write
+    * anything that would not read back as exactly `entries`: a validation gap
+    * then fails loudly instead of silently regrouping entries on disk.
+    */
+  private def persist(f: MemoryFile, entries: List[String]): Unit =
+    val rendered = renderEntries(entries)
+    if parseEntries(rendered) != entries then
+      throw IllegalStateException(
+        s"refusing to write ${f.fileName}: entries would not read back unchanged"
+      )
+    writeAtomic(f, rendered)
+    cleanupSubsumedBackups(f, entries)
 
   private def writeAtomic(f: MemoryFile, content: String): Unit =
     val tmp = os.temp(content, dir = base, prefix = ".mem_", suffix = ".tmp")

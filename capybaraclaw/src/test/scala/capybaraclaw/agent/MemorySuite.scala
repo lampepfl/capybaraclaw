@@ -410,6 +410,32 @@ class MemorySuite extends munit.FunSuite:
     )
     assertSuccess(store.add(MemoryFile.Memory, "after"))
 
+  List(
+    "a trailing separator line" -> "alpha\n§\nUse § as a divider, e.g.\n§",
+    "a leading separator line" -> "§\nalpha\n§\nbeta",
+    "a separator line with spaces" -> "alpha\n § \nbeta"
+  ).foreach: (label, content) =>
+    test(s"reconcile refuses an entry with $label"):
+      val store = freshStore()
+      driftFile(store, "manual\n\n§\n\nedit")
+      val result = store.reconcile(MemoryFile.Memory, content)
+      assertFailure(result)
+      assert(result("error").str.contains("just '§'"), result.render())
+      assertEquals(store.read(MemoryFile.Memory), "manual\n\n§\n\nedit")
+
+  test("an entry ending in '§' cannot regroup a later add"):
+    val store = freshStore()
+    driftFile(store, "manual\n\n§\n\nedit")
+    assertFailure(
+      store.reconcile(MemoryFile.Memory, "alpha\n§\nUse § as a divider\n§")
+    )
+    assertSuccess(store.reconcile(MemoryFile.Memory, "alpha\n§\nUse §, e.g."))
+    assertSuccess(store.add(MemoryFile.Memory, "beta"))
+    assertEquals(
+      store.entries(MemoryFile.Memory),
+      List("alpha", "Use §, e.g.", "beta")
+    )
+
   test("reconcile refuses content that would exceed the cap"):
     val store = freshStore()
     writeRaw(store, MemoryFile.User, "drifted \n§\nentry")
