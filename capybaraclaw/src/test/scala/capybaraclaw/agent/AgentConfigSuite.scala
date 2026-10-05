@@ -89,7 +89,10 @@ class AgentConfigSuite extends munit.FunSuite:
   workDir.test("null model names the field"): dir =>
     writeConfig(dir, """{"model":null}""")
     val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
-    assert(ex.getMessage.contains("'model' must be a string"), ex.getMessage)
+    assert(
+      ex.getMessage.contains("'model' must be a non-empty string"),
+      ex.getMessage
+    )
 
   List("1.5", "0", "-3", "1e20").foreach: n =>
     workDir.test(s"max_tokens $n is rejected as not a positive integer"): dir =>
@@ -115,3 +118,39 @@ class AgentConfigSuite extends munit.FunSuite:
     Files.write(dir.resolve("claw.json"), Array[Byte](0x7b, 0xff.toByte, 0x7d))
     val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
     assert(ex.getMessage.contains("cannot read"), ex.getMessage)
+
+  List("\"\"", "\"   \"").foreach: m =>
+    workDir.test(s"blank model $m is rejected"): dir =>
+      writeConfig(dir, s"""{"model":$m}""")
+      val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(
+        ex.getMessage.contains("'model' must be a non-empty string"),
+        ex.getMessage
+      )
+
+  workDir.test("blank classified_paths entry is rejected"): dir =>
+    writeConfig(dir, """{"classified_paths":["keys", ""]}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(ex.getMessage.contains("classified_paths"), ex.getMessage)
+
+  workDir.test("unknown key close to a known one suggests it"): dir =>
+    writeConfig(dir, """{"classifed_paths":["keys"]}""")
+    val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+    assert(
+      ex.getMessage.contains(
+        "unknown key 'classifed_paths', did you mean 'classified_paths'?"
+      ),
+      ex.getMessage
+    )
+
+  workDir.test("unknown key far from any known one lists the known keys"):
+    dir =>
+      writeConfig(dir, """{"thinking":"high"}""")
+      val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(ex.getMessage.contains("unknown key 'thinking'"), ex.getMessage)
+      assert(
+        ex.getMessage.contains(
+          "known keys: provider, model, max_tokens, classified_paths"
+        ),
+        ex.getMessage
+      )
