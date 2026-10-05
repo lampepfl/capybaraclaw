@@ -12,7 +12,7 @@ class ClawAgent(
     val workDir: String,
     initialMessages: List[Message] = Nil,
     endpointOverride: Option[Endpoint] = None,
-    memoryStore: MemoryStore = MemoryStore.default()
+    memoryStore: MemoryStore
 ):
   val agentConfig: AgentConfig =
     AgentConfig.load(workDir, memoryStore.snapshot())

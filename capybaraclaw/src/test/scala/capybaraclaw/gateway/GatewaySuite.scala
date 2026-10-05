@@ -1,6 +1,6 @@
 package capybaraclaw.gateway
 
-import capybaraclaw.agent.ClawAgent
+import capybaraclaw.agent.{ClawAgent, MemoryStore}
 import capybaraclaw.gateway.port.{Port, ReplyStream}
 import capybaraclaw.gateway.port.cli.CliPort
 import capybaraclaw.gateway.port.slack.SlackPort
@@ -303,7 +303,8 @@ class GatewaySuite extends munit.FunSuite:
       ClawAgent(
         wd,
         initialMessages = hist,
-        endpointOverride = Some(endpointFactory())
+        endpointOverride = Some(endpointFactory()),
+        memoryStore = MemoryStore(os.temp.dir(prefix = "claw-gw-mem-").toIO)
       )
 
     Async.blocking:
