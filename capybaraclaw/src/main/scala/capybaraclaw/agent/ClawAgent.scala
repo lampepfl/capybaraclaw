@@ -12,10 +12,10 @@ class ClawAgent(
     val workDir: String,
     initialMessages: List[Message] = Nil,
     endpointOverride: Option[Endpoint] = None,
-    memoryStore: MemoryStore
+    memory: MemoryAccess
 ):
   val agentConfig: AgentConfig =
-    AgentConfig.load(workDir, memoryStore.snapshot())
+    AgentConfig.load(workDir, memory.snapshot())
 
   private val replEnv: ReplEnvironment =
     ReplEnvironment(workDir, agentConfig.classifiedPaths)
@@ -30,7 +30,7 @@ class ClawAgent(
         val llmConfig = agentConfig.toLLMConfig
 
     EvalScalaTool.register(a, replEnv.repl)
-    MemoryTool.register(a, memoryStore)
+    MemoryTool.register(a, memory)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue
     // where they left off.

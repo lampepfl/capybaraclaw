@@ -1,6 +1,7 @@
 package capybaraclaw.gateway.port.slack
 
 import capybaraclaw.gateway.{
+  Conversation,
   GatewayMessage,
   Origin,
   PortId,
@@ -13,6 +14,8 @@ import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, ReadableChannel, UnboundedChannel}
 import org.slf4j.LoggerFactory
 import scala.util.control.NonFatal
+
+import java.util.concurrent.ConcurrentHashMap
 
 /** Gateway Port backed by Slack Socket Mode.
   *
@@ -32,6 +35,11 @@ class SlackPort(bot: SlackApi) extends Port:
 
   private val logger = LoggerFactory.getLogger(classOf[SlackPort])
   private val outCh = UnboundedChannel[GatewayMessage]()
+
+  /** Channel ids seen in a DM. Slack only says so on the message itself, so
+    * it is recorded on the way in, before the gateway asks.
+    */
+  private val directChannels = ConcurrentHashMap.newKeySet[String]().nn
 
   def incoming: ReadableChannel[GatewayMessage] = outCh.asReadable
 
@@ -179,7 +187,19 @@ class SlackPort(bot: SlackApi) extends Port:
     try bot.shutdown()
     catch case _: Throwable => ()
 
+  /** A DM is [[Conversation.Direct]]; a channel, a group DM and any channel
+    * not seen in a DM are shared.
+    */
+  override def conversation(origin: Origin): Conversation =
+    val (channelId, _) = decodeHandle(getSlackHandle(origin))
+    if directChannels.contains(channelId) then Conversation.Direct
+    else Conversation.Group(channelId)
+
   private def toOrigin(msg: Message): Origin =
+    msg.origin match
+      case MessageOrigin.DirectMessage(channelId) =>
+        directChannels.add(channelId)
+      case _ => ()
     val raw = SlackPort.handleValue(msg.origin.channelId, msg.threadTs, msg.ts)
     Origin(
       port = id,

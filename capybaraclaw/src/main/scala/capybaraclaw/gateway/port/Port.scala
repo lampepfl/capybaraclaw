@@ -1,6 +1,12 @@
 package capybaraclaw.gateway.port
 
-import capybaraclaw.gateway.{GatewayMessage, Origin, PortId, SessionId}
+import capybaraclaw.gateway.{
+  Conversation,
+  GatewayMessage,
+  Origin,
+  PortId,
+  SessionId
+}
 import gears.async.ReadableChannel
 
 /** A message source/sink through which the Gateway talks to the outside world.
@@ -21,6 +27,12 @@ trait Port extends AutoCloseable:
     * before the agent generates and persists an undeliverable response.
     */
   def validateOriginForReply(origin: Origin): Unit = ()
+
+  /** Whether a session started by `origin` is private to its user or shared
+    * with others. There is deliberately no default: when unsure, a port must
+    * answer [[Conversation.Group]] so no private memory leaks.
+    */
+  def conversation(origin: Origin): Conversation
 
   /** Open a reply sink for an agent turn. Called at the start of each turn for a
     * message that originated on this port. The runner forwards stream deltas, then

@@ -1,6 +1,6 @@
 package capybaraclaw.gateway
 
-import capybaraclaw.agent.{ClawAgent, MemoryStore}
+import capybaraclaw.agent.{ClawAgent, MemoryAccess}
 import capybaraclaw.gateway.port.{Port, ReplyStream}
 import capybaraclaw.gateway.port.cli.CliPort
 import capybaraclaw.gateway.port.slack.SlackPort
@@ -78,13 +78,19 @@ class RejectingPort(override val id: PortId) extends FakePort(id):
     throw IllegalArgumentException("invalid reply origin")
 
 /** In-memory Port that lets tests push inbound messages and capture outbound replies. */
-class FakePort(override val id: PortId) extends Port:
+class FakePort(
+    override val id: PortId,
+    conversationOf: Origin => Conversation = _ => Conversation.Group("C-fake")
+) extends Port:
   private val inCh = UnboundedChannel[GatewayMessage]()
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
   private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
 
   def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
+
+  override def conversation(origin: Origin): Conversation =
+    conversationOf(origin)
 
   override def openReply(sessionId: SessionId, origin: Origin): ReplyStream =
     new ReplyStream:
@@ -278,7 +284,8 @@ class GatewaySuite extends munit.FunSuite:
       created: AtomicInteger,
       historySeen: ConcurrentLinkedQueue[List[Message]] =
         ConcurrentLinkedQueue(),
-      gatewayWorkDir: String = workDir
+      gatewayWorkDir: String = workDir,
+      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue()
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     runGatewayWithResult(
       ports,
@@ -286,7 +293,8 @@ class GatewaySuite extends munit.FunSuite:
       endpointFactory,
       created,
       historySeen,
-      gatewayWorkDir
+      gatewayWorkDir,
+      accessSeen
     )(body)
 
   private def runGatewayWithResult[R](
@@ -295,20 +303,27 @@ class GatewaySuite extends munit.FunSuite:
       endpointFactory: () => Endpoint,
       created: AtomicInteger,
       historySeen: ConcurrentLinkedQueue[List[Message]],
-      gatewayWorkDir: String
+      gatewayWorkDir: String,
+      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue()
   )(body: Async.Spawn ?=> Gateway => R): R =
-    val factory: (String, List[Message]) => ClawAgent = (wd, hist) =>
-      created.incrementAndGet()
-      historySeen.offer(hist)
-      ClawAgent(
-        wd,
-        initialMessages = hist,
-        endpointOverride = Some(endpointFactory()),
-        memoryStore = MemoryStore(os.temp.dir(prefix = "claw-gw-mem-").toIO)
-      )
+    val factory: (String, List[Message], MemoryAccess) => ClawAgent =
+      (wd, hist, access) =>
+        created.incrementAndGet()
+        historySeen.offer(hist)
+        accessSeen.offer(access)
+        ClawAgent(
+          wd,
+          initialMessages = hist,
+          endpointOverride = Some(endpointFactory()),
+          memory = access
+        )
+    val memory = MemoryDirectory(
+      os.temp.dir(prefix = "claw-gw-mem-").toIO,
+      Identities.empty
+    )
 
     Async.blocking:
-      val gateway = Gateway(gatewayWorkDir, ports, cp, factory)
+      val gateway = Gateway(gatewayWorkDir, ports, cp, memory, factory)
       val gwFut = Future(gateway.run())
       try body(gateway)
       finally
@@ -356,6 +371,57 @@ class GatewaySuite extends munit.FunSuite:
       assertEquals(persisted(2).text, "[U_bob] pong")
       assertEquals(persisted(3).role, Role.Assistant)
       assertEquals(persisted(3).text, "yes")
+    }
+
+  test("a shared session gets channel and public memory, never private"):
+    val port = FakePort(SlackPort.Id, _ => Conversation.Group("C1"))
+    val accessSeen = ConcurrentLinkedQueue[MemoryAccess]()
+    runGateway(
+      List(port),
+      FakeContextProvider(),
+      endpointFactory = () => StubEndpoint(List(textResponse("hi"))),
+      created = AtomicInteger(0),
+      accessSeen = accessSeen
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "C1/1"), "hi")
+      )
+      port.nextReply()
+      val access = accessSeen.asScala.toList.head
+      assertEquals(access.scopes.map(_.file.target), List("channel", "public"))
+      assert(!access.scope("public").get.writable)
+      assert(access.conversation.contains("channel C1"), access.conversation)
+    }
+
+  test("a direct session gets its starter's private memory"):
+    val port = FakePort(SlackPort.Id, _ => Conversation.Direct)
+    val accessSeen = ConcurrentLinkedQueue[MemoryAccess]()
+    runGateway(
+      List(port),
+      FakeContextProvider(),
+      endpointFactory = () => StubEndpoint(List(textResponse("hi"))),
+      created = AtomicInteger(0),
+      accessSeen = accessSeen
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "D1/1"), "hi")
+      )
+      port.nextReply()
+      val access = accessSeen.asScala.toList.head
+      assertEquals(
+        access.scopes.map(_.file.target),
+        List("user", "private", "public")
+      )
+      assert(
+        access
+          .scope("private")
+          .get
+          .store
+          .baseDir
+          .getPath
+          .endsWith("persons/slack%3AU_alice"),
+        access.scope("private").get.store.baseDir.getPath
+      )
     }
 
   test("distinct Slack handles spawn distinct runners"):

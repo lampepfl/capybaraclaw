@@ -90,7 +90,7 @@ object AgentConfig:
             throw ConfigError(
               s"$path is not a valid JSON object: ${e.getMessage}"
             )
-    rejectUnknownKeys(obj, path)
+    ConfigKeys.rejectUnknown(obj.keys, KnownKeys, path)
     val provider =
       field(obj, path, "provider", "a string")(_.str)
         .map: id =>
@@ -116,34 +116,6 @@ object AgentConfig:
         ).getOrElse(Nil),
       memorySnapshot = memorySnapshot
     )
-
-  /** Fail on keys outside [[KnownKeys]]: a typo such as `classifed_paths` would
-    * otherwise silently drop that setting. Suggests the closest known key.
-    */
-  private def rejectUnknownKeys(
-      obj: Map[String, ujson.Value],
-      path: String
-  ): Unit =
-    obj.keys.toList.sorted
-      .find(!KnownKeys.contains(_))
-      .foreach: key =>
-        val closest = KnownKeys.minBy(editDistance(key, _))
-        val hint =
-          if editDistance(key, closest) <= 2 then s"did you mean '$closest'?"
-          else s"known keys: ${KnownKeys.mkString(", ")}"
-        throw ConfigError(s"$path: unknown key '$key', $hint")
-
-  private def editDistance(a: String, b: String): Int =
-    var prev = Array.range(0, b.length + 1)
-    for i <- 1 to a.length do
-      val curr = Array.ofDim[Int](b.length + 1)
-      curr(0) = i
-      for j <- 1 to b.length do
-        val cost = if a(i - 1) == b(j - 1) then 0 else 1
-        curr(j) =
-          math.min(math.min(curr(j - 1), prev(j)) + 1, prev(j - 1) + cost)
-      prev = curr
-    prev(b.length)
 
   private def nonBlankString(v: ujson.Value): String =
     v.str match

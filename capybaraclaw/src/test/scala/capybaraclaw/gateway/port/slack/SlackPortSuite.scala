@@ -1,6 +1,7 @@
 package capybaraclaw.gateway.port.slack
 
 import capybaraclaw.gateway.{
+  Conversation,
   Origin,
   PortId,
   SessionHandle,
@@ -8,10 +9,44 @@ import capybaraclaw.gateway.{
   SessionRef,
   UserId
 }
-import gears.async.{ReadableChannel, UnboundedChannel}
+import gears.async.{Async, ReadableChannel, UnboundedChannel}
+import gears.async.default.given
 import scala.collection.mutable.ListBuffer
 
 class SlackPortSuite extends munit.FunSuite:
+
+  private def receive(bot: FakeSlackApi, port: SlackPort, msg: Message) =
+    Async.blocking:
+      port.start()
+      bot.deliver(msg)
+      val origin = port.incoming.read().toOption.get.origin
+      bot.shutdown()
+      origin
+
+  test("a DM is a direct conversation"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = receive(
+      bot,
+      port,
+      Message("U1", "hi", "1.0", None, MessageOrigin.DirectMessage("D1"))
+    )
+    assertEquals(port.conversation(origin), Conversation.Direct)
+
+  test("a channel or group DM is shared"):
+    List(
+      MessageOrigin.ChannelMessage("C1"),
+      MessageOrigin.GroupMessage("C1")
+    ).foreach: kind =>
+      val bot = FakeSlackApi()
+      val port = SlackPort(bot)
+      val origin = receive(bot, port, Message("U1", "hi", "1.0", None, kind))
+      assertEquals(port.conversation(origin), Conversation.Group("C1"))
+
+  test("a channel never seen in a DM is shared"):
+    val port = SlackPort(FakeSlackApi())
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "D9/1.0"))
+    assertEquals(port.conversation(origin), Conversation.Group("D9"))
 
   test("complete routes a channel handle as a top-level Slack message"):
     val bot = FakeSlackApi()
@@ -343,6 +378,8 @@ private final class FakeSlackApi(
     User(id, id, id, id)
 
   def messageChannel: ReadableChannel[Message] = messages.asReadable
+
+  def deliver(msg: Message): Unit = messages.sendImmediately(msg)
 
   def shutdown(): Unit = messages.close()
 

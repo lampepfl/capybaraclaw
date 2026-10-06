@@ -1,7 +1,7 @@
 package capybaraclaw.gateway
 
 import capybaraclaw.Throwables
-import capybaraclaw.agent.ClawAgent
+import capybaraclaw.agent.{ClawAgent, MemoryAccess}
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future}
 import org.slf4j.LoggerFactory
@@ -25,9 +25,11 @@ class Gateway(
     workDir: String,
     ports: List[Port],
     contextProvider: ContextProvider,
+    memory: MemoryDirectory,
     clawFactory: (
         String,
-        List[tacit.agents.llm.endpoint.Message]
+        List[tacit.agents.llm.endpoint.Message],
+        MemoryAccess
     ) => ClawAgent
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
@@ -72,7 +74,7 @@ class Gateway(
             try
               port.validateOriginForReply(msg.origin)
               val sessionId = resolveSessionId(msg.origin)
-              val runner = getOrCreateRunner(sessionId)
+              val runner = getOrCreateRunner(sessionId, port, msg.origin)
               runner.deliver(RoutedGatewayMessage(msg, port))
             catch
               case e: IllegalArgumentException =>
@@ -90,7 +92,15 @@ class Gateway(
         case Left(_) =>
           running = false
 
-  private def getOrCreateRunner(sessionId: SessionId)(using
+  /** The first message of a session decides its memory for the session's
+    * lifetime: the port says whether the conversation is private, and the
+    * origin who started it.
+    */
+  private def getOrCreateRunner(
+      sessionId: SessionId,
+      port: Port,
+      origin: Origin
+  )(using
       Async.Spawn
   ): AgentRunner =
     runnersLock.synchronized:
@@ -98,7 +108,9 @@ class Gateway(
         case Some(r) => r
         case None    =>
           val history = contextProvider.load(sessionId)
-          val claw = clawFactory(workDir, history)
+          val access =
+            memory.access(port.id, origin.user, port.conversation(origin))
+          val claw = clawFactory(workDir, history, access)
           val runner =
             AgentRunner(sessionId, claw, contextProvider)
           runner.start()
