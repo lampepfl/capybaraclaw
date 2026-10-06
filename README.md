@@ -19,3 +19,36 @@ Then, inside `capybaraclaw/`, run `sbt test` for a sanity-check. It should build
 
 Do `sbt claw`. This requires a valid `OPENROUTER_API_KEY` in the environment.
 
+## Connecting to Slack
+
+Pass `--enable-slack`; capybara then also needs `SLACK_BOT_TOKEN` (`xoxb-…`)
+and `SLACK_APP_TOKEN` (`xapp-…`) in the environment. Create the Slack app as
+Slack's documentation describes; what capybara relies on:
+
+- [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode)
+  enabled. The app-level token is `SLACK_APP_TOKEN`.
+- [Interactivity](https://docs.slack.dev/interactivity/handling-user-interaction)
+  enabled, or the buttons on permission requests do nothing: the request stays
+  pending and the agent keeps waiting.
+- The `message` events
+  ([`message.channels`](https://docs.slack.dev/reference/events/message.channels),
+  [`message.groups`](https://docs.slack.dev/reference/events/message.groups),
+  [`message.im`](https://docs.slack.dev/reference/events/message.im),
+  [`message.mpim`](https://docs.slack.dev/reference/events/message.mpim))
+  for the conversations capybara should answer in.
+- Bot token scopes for the Web API methods it calls; each method's page lists
+  the scopes it needs:
+  [`auth.test`](https://docs.slack.dev/reference/methods/auth.test),
+  [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage),
+  [`chat.update`](https://docs.slack.dev/reference/methods/chat.update),
+  [`chat.postEphemeral`](https://docs.slack.dev/reference/methods/chat.postEphemeral),
+  [`chat.startStream`](https://docs.slack.dev/reference/methods/chat.startStream),
+  [`chat.appendStream`](https://docs.slack.dev/reference/methods/chat.appendStream),
+  [`chat.stopStream`](https://docs.slack.dev/reference/methods/chat.stopStream),
+  [`reactions.add`](https://docs.slack.dev/reference/methods/reactions.add),
+  [`reactions.remove`](https://docs.slack.dev/reference/methods/reactions.remove),
+  [`conversations.history`](https://docs.slack.dev/reference/methods/conversations.history),
+  [`conversations.info`](https://docs.slack.dev/reference/methods/conversations.info),
+  [`users.info`](https://docs.slack.dev/reference/methods/users.info).
+  A missing scope shows up as a `missing_scope` error in
+  `~/.claw/logs/capybara.log`.
