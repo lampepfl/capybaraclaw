@@ -3,7 +3,6 @@ package capybaraclaw.gateway.sqlite
 import java.io.File
 import java.sql.{Connection, DriverManager}
 import java.util.concurrent.ArrayBlockingQueue
-import scala.util.control.NonFatal
 
 private[sqlite] class SqliteReaderPool(dbFile: File, size: Int)
     extends AutoCloseable:
@@ -34,7 +33,9 @@ private[sqlite] class SqliteReaderPool(dbFile: File, size: Int)
         queue.put(c)
       (opened.toList, queue)
     catch
-      case NonFatal(e) =>
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
+      case e: Throwable =>
         opened.foreach: c =>
           bestEffort:
             c.close()
@@ -47,7 +48,9 @@ private[sqlite] class SqliteReaderPool(dbFile: File, size: Int)
       SqliteJdbc.execute(c, "PRAGMA query_only = 1")
       c
     catch
-      case NonFatal(e) =>
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
+      case e: Throwable =>
         bestEffort:
           c.close()
         throw e

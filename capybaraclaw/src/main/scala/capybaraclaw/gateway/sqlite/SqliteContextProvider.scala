@@ -22,7 +22,6 @@ import java.nio.file.{Files, Path, Paths}
 import java.sql.{Connection, DriverManager}
 import java.time.Instant
 import scala.util.Using
-import scala.util.control.NonFatal
 
 /** SQLite-backed transcript store keyed by UUID `SessionId`.
   *
@@ -48,7 +47,9 @@ class SqliteContextProvider(
   private val readers: SqliteReaderPool =
     try SqliteReaderPool(dbFile, size = 2)
     catch
-      case NonFatal(e) =>
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
+      case e: Throwable =>
         bestEffort:
           writer.close()
         throw e
@@ -192,7 +193,9 @@ class SqliteContextProvider(
       SqliteJdbc.execute(c, "PRAGMA journal_size_limit = 67108864") /* 64 MiB */
       c
     catch
-      case NonFatal(e) =>
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
+      case e: Throwable =>
         bestEffort:
           c.close()
         throw e
