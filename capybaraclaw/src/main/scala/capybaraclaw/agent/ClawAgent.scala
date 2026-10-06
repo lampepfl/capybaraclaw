@@ -5,7 +5,12 @@ import tacit.agents.llm.agentic.{Agent, AgentRun, AgentState, AgentError}
 import gears.async.Async
 import tacit.agents.utils.Result
 
-import capybaraclaw.agent.tools.{EvalScalaTool, MemoryTool, SessionSearchTool}
+import capybaraclaw.agent.tools.{
+  EvalScalaTool,
+  MemoryTool,
+  SessionSearchTool,
+  ShowInterfaceTool
+}
 import capybaraclaw.gateway.{SessionId, SessionSearch}
 
 /** Agent class for Claw. */
@@ -35,6 +40,7 @@ class ClawAgent(
     EvalScalaTool.register(a, replEnv.repl)
     MemoryTool.register(a, memory)
     SessionSearchTool.register(a, sessionSearch, sessionId)
+    ShowInterfaceTool.register(a, replEnv.loadedPlugins, replEnv.coreInterface)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue
     // where they left off.

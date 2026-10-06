@@ -2,5 +2,5 @@
   "provider": "ollama",
   "model": "gemma4:e4b",
   "max_tokens": 16000,
-  "classified_paths": ["$workdir/emails/", "$workdir/CLAW.md", "$workdir/claw.json"]
+  "classified_paths": ["$workdir/emails/"]
 }

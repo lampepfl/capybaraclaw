@@ -1,10 +1,12 @@
-val scala3Version = "3.10.0-RC1-bin-20260816-3adfcbd-NIGHTLY"
+// Must match the nightly TACIT is built with: nightly TASTy is experimental and
+// not readable across nightlies.
+val scala3Version = "3.10.1-RC1-bin-20260930-0afa84a-NIGHTLY"
 ThisBuild / resolvers += Resolver.scalaNightlyRepository
 
 val stableScala3Version = "3.8.4"
 
-val tacitVersion = "0.2.1-SNAPSHOT"
-val tacitLibraryVersion = "0.2.1-SNAPSHOT"
+val tacitVersion = "0.2.2-SNAPSHOT"
+val tacitLibraryVersion = "0.2.2-SNAPSHOT"
 
 lazy val clawCommand = Command.args("claw", "[<path>] [--flags...]") { (state, args) =>
   val quotedArgs = args.map { arg =>

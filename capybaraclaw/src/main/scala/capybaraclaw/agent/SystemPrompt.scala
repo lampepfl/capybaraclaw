@@ -21,10 +21,7 @@ private[agent] object SystemPrompt:
       Some(
         renderResource(
           "prompts/system.md",
-          Map(
-            "work_dir" -> config.workDir,
-            "interface_source" -> loadInterfaceSource()
-          )
+          Map("work_dir" -> config.workDir)
         )
       ),
       Option.when(config.classifiedPaths.nonEmpty):
@@ -97,10 +94,6 @@ private[agent] object SystemPrompt:
   private def loadRequiredResource(path: String): String =
     loadResource(path).getOrElse:
       throw IllegalStateException(s"Missing system prompt template: $path")
-
-  private def loadInterfaceSource(): String =
-    loadResource("Interface.scala")
-      .getOrElse("(Interface.scala not found on classpath)")
 
   private def loadClawMd(workDir: String): Option[String] =
     val file = File(workDir, "CLAW.md")

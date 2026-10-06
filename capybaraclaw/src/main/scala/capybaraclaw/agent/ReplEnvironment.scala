@@ -1,7 +1,7 @@
 package capybaraclaw.agent
 
-import tacit.core.{Context as TacitContext, Config as TacitConfig}
-import tacit.executor.ReplSession
+import tacit.core.{Context as TacitContext, Config as TacitConfig, LoadedPlugin}
+import tacit.executor.{ManagedRepl, ReplSession}
 import tacit.library.Interface as TacitLibraryInterface
 
 import io.circe.Json
@@ -10,21 +10,42 @@ import io.circe.syntax.*
 import scala.util.Try
 
 final class ReplEnvironment(workDir: String, classifiedPaths: List[String]):
+  val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
+
   private val context: TacitContext = TacitContext(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
       libraryConfig = Json.obj(
+        "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
         "classifiedPaths" -> ReplEnvironment
           .classifiedPatterns(workDir, classifiedPaths)
           .asJson
       )
     ),
-    recorder = None
+    recorder = None,
+    plugins = loadedPlugins
   )
+
+  val coreInterface: String =
+    ManagedRepl
+      .readLibraryResource("Interface.scala.txt")(using context)
+      .getOrElse:
+        throw IllegalStateException(
+          "Interface.scala.txt missing from tacit-library JAR (build issue)"
+        )
 
   val repl: ReplSession = ReplSession.create(using context)
 
 object ReplEnvironment:
+  /** Workdir files that steer the gateway itself: plugin jars run as trusted
+    * code in every new session, and `claw.json` and `CLAW.md` configure it.
+    * The agent may read them but never change them; tacit resolves the paths
+    * through symlinks and matches them case-insensitively.
+    */
+  private[agent] def readOnlyPaths(workDir: String): List[String] =
+    val base = java.nio.file.Path.of(workDir).toAbsolutePath.normalize
+    List("plugins", "claw.json", "CLAW.md").map(base.resolve(_).toString)
+
   /** Mirrors tacit's `InterfaceImpl.DefaultClassifiedPatterns`, which tacit
     * only applies when `classifiedPaths` is absent from the library config.
     * We always send the key, so the defaults are merged in here instead.
