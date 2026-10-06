@@ -53,7 +53,7 @@ class SystemPromptSuite extends munit.FunSuite:
       SystemPromptSuite.systemSection(config) +
         "\n\n" +
         """<classified_paths>
-          |The following paths are classified. Reading them yields `Classified[T]`: classified values cannot be unwrapped or printed directly. Write results derived from them only with the classified output function documented by show_interface.
+          |The following paths are classified. The REPL API only exposes their contents as `Classified[T]`, which cannot be unwrapped or printed. Write results derived from them only to classified paths, with the classified write function if show_interface lists one; if it lists none, do not write them at all.
           |- secret/
           |</classified_paths>""".stripMargin +
         "\n\n" +
