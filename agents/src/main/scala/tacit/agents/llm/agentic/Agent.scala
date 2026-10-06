@@ -209,7 +209,7 @@ abstract class Agent:
             case tu: Content.ToolUse => tu
 
           for tu <- toolUses do
-            val msg = dispatchTool(tu)
+            val msg = dispatchTool(tu, () => spawn.group.isCancelled)
             state.messages = state.messages :+ msg
             val resultContent = msg.content.collectFirst:
               case Content.ToolResult(_, content, _) => content
@@ -278,8 +278,15 @@ abstract class Agent:
   /** Every tool call gets a result, an error one when the call is invalid or
     * the tool throws: providers reject a history with an unanswered call, and
     * the model can correct itself instead of the run ending.
+    *
+    * A `CancellationException` only ends the run when `runCancelled` says the
+    * run itself is being cancelled; one from the tool's own work (a future it
+    * waited on was cancelled) is a tool failure like any other.
     */
-  private def dispatchTool(toolUse: Content.ToolUse): Message =
+  private def dispatchTool(
+      toolUse: Content.ToolUse,
+      runCancelled: () => Boolean = () => false
+  ): Message =
     def error(text: String) = Message.toolResult(toolUse.id, text, true)
     tools.find(_.name == toolUse.name) match
       case None =>
@@ -297,6 +304,6 @@ abstract class Agent:
                 tool.handle(args.asInstanceOf[tool.ArgType], state)
               )
             catch
-              case e: CancellationException => throw e
-              case NonFatal(e)              =>
+              case e: CancellationException if runCancelled() => throw e
+              case NonFatal(e)                                =>
                 error(s"Tool ${toolUse.name} failed: $e")

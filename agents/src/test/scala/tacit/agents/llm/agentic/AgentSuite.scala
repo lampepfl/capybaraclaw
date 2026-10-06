@@ -14,7 +14,13 @@ import endpoint.{
 }
 import tacit.agents.utils.Result
 import tacit.agents.llm.utils.IsToolArg
-import gears.async.{Async, ReadableChannel, UnboundedChannel, Future}
+import gears.async.{
+  Async,
+  Cancellable,
+  ReadableChannel,
+  UnboundedChannel,
+  Future
+}
 import gears.async.default.given
 import endpoint.StreamEvent
 import java.util.concurrent.CountDownLatch
@@ -147,6 +153,16 @@ object ThrowingTool extends AgentTool[AgentState]:
   def description = "Always throws"
   def handle(arg: LookupArgs, state: AgentState): String =
     throw IllegalStateException("boom")
+
+/** Throws a `CancellationException` from its own work (say, a future it waited
+  * on was cancelled) while nothing is cancelling the run.
+  */
+object CancelledTaskTool extends AgentTool[AgentState]:
+  type ArgType = LookupArgs
+  def name = "wait_for_task"
+  def description = "Waits for a task that was cancelled"
+  def handle(arg: LookupArgs, state: AgentState): String =
+    throw java.util.concurrent.CancellationException("inner task cancelled")
 
 /** The tool result answering `id` in `messages`, with its error flag. */
 def toolResultIn(messages: List[Message], id: String): (String, Boolean) =
@@ -525,6 +541,73 @@ class AgentSuite extends munit.FunSuite:
       val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
       assert(isError)
       assert(content.contains("boom"), content)
+
+  test(
+    "streamAsk: a tool's own CancellationException is a tool error, not the end of the run"
+  ):
+    Async.blocking:
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "wait_for_task", """{"key": "x"}""")),
+          textResponse("recovered")
+        )
+      )
+      given Endpoint = ep
+      val agent = makeAgent(List(CancelledTaskTool))
+      val events = readAll(agent.streamAsk("go").events)
+      assert(!events.exists(_.isLeft), events)
+      val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+      assert(isError)
+      assert(content.contains("inner task cancelled"), content)
+
+  test(
+    "streamAsk: cancelling the run still ends it instead of answering the call"
+  ):
+    Async.blocking:
+      val ep = StubEndpoint(
+        List(
+          toolCallResponse(("call-1", "cancel_run", """{"key": "x"}""")),
+          textResponse("not reached")
+        )
+      )
+      given Endpoint = ep
+      val runScope = java.util.concurrent.atomic.AtomicReference[Cancellable]()
+      // Cancels the scope the run was spawned in, as a shutdown would, then
+      // fails the way a blocking call does once its scope is cancelled.
+      object CancelRunTool extends AgentTool[AgentState]:
+        type ArgType = LookupArgs
+        def name = "cancel_run"
+        def description = "Cancels the run"
+        def handle(arg: LookupArgs, state: AgentState): String =
+          runScope.get().cancel()
+          throw java.util.concurrent.CancellationException("run cancelled")
+      val agent = makeAgent(List(CancelRunTool))
+      Async.group:
+        runScope.set(summon[Async].group)
+        scala.util.Try(readAll(agent.streamAsk("go").events))
+      val answered = agent.state.messages
+        .flatMap(_.content)
+        .exists:
+          case Content.ToolResult("call-1", _, _) => true
+          case _                                  => false
+      assert(!answered, agent.state.messages)
+
+  test(
+    "ask: a tool's own CancellationException is a tool error, not the end of the run"
+  ):
+    val ep = StubEndpoint(
+      List(
+        toolCallResponse(("call-1", "wait_for_task", """{"key": "x"}""")),
+        textResponse("recovered")
+      )
+    )
+    given Endpoint = ep
+    val agent = makeAgent(List(CancelledTaskTool))
+    val result = agent.ask("go")
+    assert(result.isRight, result)
+    val (content, isError) = toolResultIn(ep.invokedWith(1), "call-1")
+    assert(isError)
+    assert(content.contains("inner task cancelled"), content)
 
   test("streamAsk: multiple tool calls in one response"):
     Async.blocking:
