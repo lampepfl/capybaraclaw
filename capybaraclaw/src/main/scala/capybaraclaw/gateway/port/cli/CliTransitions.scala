@@ -12,6 +12,7 @@ object CliTransitions:
     case AssistantTextDelta(text: String)
     case AssistantTextComplete(text: String)
     case ErrorText(text: String)
+    case ToolCall(toolName: String, args: String)
     case SpinnerTick(nowMillis: Long)
     case HintTick(buffer: String)
     case InputReadFailed(error: Throwable)
@@ -43,7 +44,7 @@ object CliTransitions:
       )
 
   enum Role:
-    case User, Assistant, Error
+    case User, Assistant, Error, Tool
 
   enum CliEffect:
     case Render(role: Role, text: String)
@@ -97,6 +98,19 @@ object CliTransitions:
           TransitionResult(
             state,
             List(RenderAssistantComplete, Render(Role.Error, text))
+          )
+        else TransitionResult(state, Nil)
+
+      case ToolCall(toolName, args) =>
+        // Flushes the text streamed before the call, so it prints above the
+        // tool line and the text after it starts a new assistant entry.
+        if state.running then
+          TransitionResult(
+            state,
+            List(
+              RenderAssistantComplete,
+              Render(Role.Tool, formatToolCall(toolName, args))
+            )
           )
         else TransitionResult(state, Nil)
 
@@ -238,3 +252,22 @@ object CliTransitions:
   def prepareEntryLines(text: String): List[String] =
     val nonEmpty = text.linesIterator.filter(_.nonEmpty).toList
     if nonEmpty.isEmpty then List("") else nonEmpty
+
+  val ToolArgsMaxLen: Int = 80
+
+  def formatToolCall(toolName: String, args: String): String =
+    s"${compactWhitespace(toolName)}(${compactArgs(args)})"
+
+  def compactArgs(args: String): String =
+    truncate(compactWhitespace(args), ToolArgsMaxLen)
+
+  /** Control characters go too: a call to an unknown tool, or with args that
+    * do not parse, is still reported, with the name and args exactly as the
+    * model sent them, so an escape sequence in them would reach the terminal.
+    */
+  private def compactWhitespace(text: String): String =
+    text.replaceAll("[\\s\\p{Cc}]+", " ").trim
+
+  private def truncate(text: String, maxLen: Int): String =
+    if text.codePointCount(0, text.length) <= maxLen then text
+    else s"${text.substring(0, text.offsetByCodePoints(0, maxLen - 1))}…"
