@@ -236,14 +236,15 @@ private def canonicalFile(path: String): Either[String, File] =
         s"[claw] failed to resolve workdir '$path': ${Throwables.errorMessage(e)}"
       )
 
-private def pluginsBannerLine(workDir: String): String =
-  if Plugins.scanDirs(workDir).isEmpty then "none (no plugins/ folder)"
+/** The banner is for the operator, so it shows problems in full. */
+private def pluginsBannerLines(workDir: String): List[String] =
+  if !Plugins.hasDir(workDir) then List("none (no plugins/ folder)")
   else
-    try
-      Plugins.load(workDir) match
-        case Nil     => "none"
-        case plugins => plugins.map(Plugins.describe).mkString(", ")
-    catch case e: ConfigError => s"error: ${e.getMessage}"
+    val report = Plugins.scan(workDir)
+    val loaded = report.loaded match
+      case Nil     => "none"
+      case plugins => plugins.map(Plugins.describe).mkString(", ")
+    loaded :: report.problems.map(p => s"! $p")
 
 private def printStartupInfo(
     workDir: String,
@@ -256,7 +257,8 @@ private def printStartupInfo(
   println("Capybara Claw Gateway")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
-  println(s"  plugins  : ${pluginsBannerLine(workDir)}")
+  pluginsBannerLines(workDir).zipWithIndex.foreach: (line, i) =>
+    println(s"  ${if i == 0 then "plugins  :" else "          "} $line")
   println(s"  logs     : $logFile")
   println(s"  slack    : ${
       if enableSlack then "enabled"

@@ -10,12 +10,14 @@ object TestPlugins:
       jarName: String,
       apiMode: String,
       preamble: String = "// test preamble",
-      id: String = "test.demo"
+      id: String = "test.demo",
+      requires: List[String] = Nil
   ): Unit =
     val pluginsDir = dir.resolve("plugins")
     Files.createDirectories(pluginsDir)
+    val requiresJson = ujson.write(ujson.Arr.from(requires))
     val manifest =
-      s"""{"schemaVersion":1,"id":"$id","name":"Demo","version":"1.0","apiMode":"$apiMode"}"""
+      s"""{"schemaVersion":1,"id":"$id","name":"Demo","version":"1.0","apiMode":"$apiMode","requires":$requiresJson}"""
     val entries = List(
       "tacit-plugin.json" -> manifest,
       "preamble.scala" -> preamble,
