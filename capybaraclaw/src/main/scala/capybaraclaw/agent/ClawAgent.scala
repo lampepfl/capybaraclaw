@@ -18,12 +18,8 @@ class ClawAgent(
   private val replEnv: ReplEnvironment =
     ReplEnvironment(workDir, agentConfig.classifiedPaths)
 
-  private given Endpoint = endpointOverride.getOrElse(agentConfig.provider match
-    case "anthropic"  => AnthropicEndpoint.createFromEnv()
-    case "openai"     => OpenAIEndpoint.createFromEnv()
-    case "openrouter" => OpenRouterEndpoint.createFromEnv()
-    case "ollama"     => OllamaEndpoint.createFromEnv()
-    case other        => throw RuntimeException(s"Unknown provider: $other"))
+  private given Endpoint =
+    endpointOverride.getOrElse(agentConfig.provider.createEndpoint())
 
   private val agent: Agent =
     val a = new Agent:
@@ -47,17 +43,3 @@ class ClawAgent(
 
   def streamAsk(message: String)(using Async.Spawn): AgentRun =
     agent.streamAsk(message)
-
-  def printStartupInfo(): Unit =
-    val clawJsonExists = java.io.File(workDir, "claw.json").exists()
-    val clawMdExists = java.io.File(workDir, "CLAW.md").exists()
-    println("Capybara Claw")
-    println(s"  workdir  : $workDir")
-    println(s"  provider : ${agentConfig.provider}")
-    println(s"  model    : ${agentConfig.model}")
-    println(s"  thinking : ${agentConfig.thinking.getOrElse("off")}")
-    println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
-    println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
-    if agentConfig.classifiedPaths.nonEmpty then
-      println(s"  classify : ${agentConfig.classifiedPaths.mkString(", ")}")
-    println()
