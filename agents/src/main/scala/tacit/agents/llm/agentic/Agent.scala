@@ -174,13 +174,17 @@ abstract class Agent:
         // send cannot land silently between the final drain and the close.
         completed.set(true)
         val leftover = drainSteering(steering)
-        if leftover.nonEmpty then
-          try ch.send(Right(AgentStreamEvent.Unconsumed(leftover)))
-          catch case _: Throwable => ()
-        try steering.close()
-        catch case _: Throwable => ()
-        try ch.close()
-        catch case _: Throwable => ()
+        try
+          // Best effort: the reader may have stopped reading, or the run is
+          // being cancelled.
+          if leftover.nonEmpty then
+            try ch.send(Right(AgentStreamEvent.Unconsumed(leftover)))
+            catch case NonFatal(_) => ()
+        finally
+          // Closing the events is how the reader learns the run is over, so
+          // it happens whatever the send did.
+          try steering.close()
+          finally ch.close()
     AgentRun(ch.asReadable, steering, completed)
 
   private def drainSteering(queue: UnboundedChannel[String]): List[String] =
@@ -237,9 +241,11 @@ abstract class Agent:
         case _ =>
           ()
     catch
-      case e: Exception =>
+      // NonFatal, not Exception: an Error from the endpoint (an assertion, a
+      // `???`) must still reach the reader as a failure, not a quiet close.
+      case NonFatal(e) =>
         try ch.send(Left(AgentError(s"Stream error: ${e.getMessage}")))
-        catch case _: Throwable => ()
+        catch case NonFatal(_) => ()
 
   private def consumeStream(
       streamCh: ReadableChannel[Result[StreamEvent, LLMError]],

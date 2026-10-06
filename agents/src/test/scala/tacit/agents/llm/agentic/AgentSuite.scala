@@ -22,6 +22,8 @@ import gears.async.{
   Future
 }
 import gears.async.default.given
+import gears.async.withTimeoutOption
+import scala.concurrent.duration.*
 import endpoint.StreamEvent
 import java.util.concurrent.CountDownLatch
 
@@ -90,6 +92,21 @@ class GatedStubEndpoint(responses: List[ChatResponse]) extends Endpoint:
       if firstCall then gate.await()
       ch.sendImmediately(delivered)
     ch.asReadable
+
+/** Stub endpoint that fails with an `Error`, not an `Exception`, as a bug in
+  * an endpoint (an assertion, a `???`) would.
+  */
+class ErrorEndpoint extends Endpoint:
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] =
+    throw AssertionError("endpoint bug")
+
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
+    throw AssertionError("endpoint bug")
 
 // --- Test tool definitions ---
 
@@ -828,6 +845,38 @@ class AgentSuite extends munit.FunSuite:
       }
       assertEquals(unconsumed, List(List("late context")))
       assert(!agent.state.messages.exists(_.text == "late context"))
+
+  test("streamAsk: an Error from the endpoint ends the run with a failure"):
+    Async.blocking:
+      given Endpoint = ErrorEndpoint()
+      val events = readAll(makeAgent().streamAsk("Hi").events)
+      val failures = events.collect { case Left(e) => e.description }
+      assert(failures.exists(_.contains("endpoint bug")), events)
+
+  test(
+    "steer: the run still closes its events when the leftovers cannot be delivered"
+  ):
+    Async.blocking:
+      val ep = GatedStubEndpoint(List(textResponse("Hello!")))
+      given Endpoint = ep
+      val agent = makeAgent()
+      val run = Async.group:
+        val run = agent.streamAsk("Hi")
+        assertEquals(run.steer("late context"), SteerOutcome.Accepted)
+        ep.release()
+        // Read up to the final response, then stop reading: the run is left
+        // blocked delivering the leftover steer, until leaving the group
+        // cancels it and the delivery fails.
+        var done = false
+        while !done do
+          run.events.read() match
+            case Right(Right(AgentStreamEvent.Stream(StreamEvent.Done(_)))) =>
+              done = true
+            case Right(_) => ()
+            case Left(_)  => fail("closed before the final response")
+        run
+      val next = withTimeoutOption(5.seconds)(run.events.read())
+      assertEquals(next.map(_.isLeft), Some(true), next)
 
   test("steer: after run ended returns RejectedRunEnded and isActive == false"):
     Async.blocking:
