@@ -60,6 +60,10 @@ object IsFieldType:
 
   given IsFieldType[String] = simple("string")(_.str)
   given IsFieldType[Int] = simple("integer")(_.num.toInt)
+  given IsFieldType[Long] = simple("integer"): v =>
+    val d = v.num
+    if d.isWhole && math.abs(d) <= 9007199254740991d then d.toLong
+    else throw IllegalArgumentException(s"$d is not an exact integer")
   given IsFieldType[Double] = simple("number")(_.num)
   given IsFieldType[Boolean] = simple("boolean")(_.bool)
 
