@@ -21,6 +21,9 @@ final class ReplEnvironment(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
       libraryConfig = Json.obj(
         "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
+        // Relative paths in agent code mean the workdir, wherever the
+        // gateway was started from.
+        "workingDir" -> java.io.File(workDir).getCanonicalPath.asJson,
         "allowedRoots" -> List(java.io.File(workDir).getCanonicalPath).asJson,
         "commandPermissions" -> List.empty[String].asJson,
         "networkPermissions" -> List.empty[String].asJson,

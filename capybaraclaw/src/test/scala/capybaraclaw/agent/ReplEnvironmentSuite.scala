@@ -136,6 +136,19 @@ class ReplEnvironmentSuite extends munit.FunSuite:
     val ran = env.repl.execute(code)
     assert(ran.output.contains("ran"), ran.output)
 
+  workDir.test("relative paths resolve against the working directory"): dir =>
+    // The test JVM runs elsewhere, so this fails if tacit resolves against
+    // the JVM's working directory.
+    val env = ReplEnvironment(dir.toString, Nil)
+    val result = env.repl.execute(
+      """requestFileSystem(".") { access("notes.txt").write("x") }"""
+    )
+    assertEquals(
+      Files.readString(dir.resolve("notes.txt")),
+      "x",
+      result.output + result.error.getOrElse("")
+    )
+
   private def existsCode(path: Path): String =
     s"""requestFileSystem("$path") { access("$path").exists }"""
 
