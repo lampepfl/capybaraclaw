@@ -5,8 +5,11 @@ import capybaraclaw.gateway.port.Port
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicReference
 
+import org.slf4j.LoggerFactory
+
 import scala.annotation.tailrec
 import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Answers TACIT's permission oracle for every session and records the users'
   * decisions. Agent code is never kept waiting: a request outside the granted
@@ -19,6 +22,7 @@ import scala.util.Try
 final class ApprovalBroker:
   import ApprovalBroker.*
 
+  private val logger = LoggerFactory.getLogger(classOf[ApprovalBroker])
   private val state = AtomicReference(BrokerState(Approvals.empty, Map.empty))
 
   /** Where the session's current turn came from: requests made by agent code
@@ -52,17 +56,41 @@ final class ApprovalBroker:
       case Right((permission, reason)) =>
         update(s => askOrAllow(s, sessionId, permission, reason))
     outcome match
-      case Outcome.Allowed                   => allow
-      case Outcome.Rejected(message)         => deny(message)
-      case Outcome.Asked(request, newPrompt) =>
-        newPrompt.foreach(turn =>
-          turn.port.requestApproval(sessionId, turn.origin, request)
+      case Outcome.Allowed           => allow
+      case Outcome.Rejected(message) => deny(message)
+      case Outcome.Asked(request, Some(turn))
+          if !shown(sessionId, turn, request) =>
+        deny(
+          s"${request.permission.describe.capitalize} needs the user's approval, but capybara could not reach the user to ask. " +
+            "Tell the user what you need and why; once they can be reached, the same request asks them again."
         )
+      case Outcome.Asked(request, _) =>
         deny(
           s"${request.permission.describe.capitalize} needs the user's approval (permission request #${request.id}). " +
             "The user has been asked. Stop and tell them you are waiting; " +
             "you will get a message once they decide."
         )
+
+  /** Shows a new request on the turn's port. If that fails the request is
+    * withdrawn, so that the agent's next attempt asks again instead of
+    * waiting on a request the user never saw.
+    */
+  private def shown(
+      sessionId: SessionId,
+      turn: Turn,
+      request: ApprovalRequest
+  ): Boolean =
+    try
+      turn.port.requestApproval(sessionId, turn.origin, request)
+      true
+    catch
+      case NonFatal(e) =>
+        logger.warn(
+          s"could not show permission request #${request.id} on port '${turn.port.id}'",
+          e
+        )
+        update(s => (s.copy(approvals = s.approvals.withdraw(request.id)), ()))
+        false
 
   private def update[A](f: BrokerState => (BrokerState, A)): A =
     @tailrec

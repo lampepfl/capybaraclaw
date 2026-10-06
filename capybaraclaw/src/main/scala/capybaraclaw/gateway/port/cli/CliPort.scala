@@ -418,7 +418,9 @@ class CliPort(
       case Permission.Files(root, Permission.FileAccess.ReadWrite) =>
         s"Allow capybara to read and write ${Permission.quote(tildify(root))}?"
       case Permission.Commands(names) =>
-        s"Allow capybara to run ${Permission.quoteAll(names)}?"
+        s"Allow capybara to run ${Permission.quoteAll(names)} with any arguments? " +
+          "Commands run outside the sandbox, as you: they can read and change " +
+          "any of your files and see the gateway's environment, API keys included."
       case Permission.Hosts(hosts, Permission.NetworkAccess.Fetch) =>
         s"Allow capybara to fetch from ${Permission.quoteAll(hosts)} (GET and HEAD only)?"
       case Permission.Hosts(hosts, Permission.NetworkAccess.Send) =>

@@ -24,7 +24,8 @@ enum Permission:
       s"read access to files under ${Permission.quote(root)}"
     case Files(root, Permission.FileAccess.ReadWrite) =>
       s"read and write access to files under ${Permission.quote(root)}"
-    case Commands(names) => s"running ${Permission.quoteAll(names)}"
+    case Commands(names) =>
+      s"running ${Permission.quoteAll(names)} with any arguments"
     case Hosts(hosts, Permission.NetworkAccess.Fetch) =>
       s"fetching from ${Permission.quoteAll(hosts)} (GET and HEAD only)"
     case Hosts(hosts, Permission.NetworkAccess.Send) =>
@@ -138,6 +139,12 @@ final case class Approvals(
           request,
           true
         )
+
+  /** Drops a pending request without a decision, e.g. one the user could not
+    * be shown.
+    */
+  def withdraw(requestId: Int): Approvals =
+    copy(pending = pending - requestId)
 
   /** `requestId = None` answers the session's most recent pending request. A
     * session can only answer its own requests.

@@ -116,7 +116,7 @@ class ApprovalsSuite extends munit.FunSuite:
     )
     assertEquals(
       Commands(Set("sbt", "git")).describe,
-      "running \"git\", \"sbt\""
+      "running \"git\", \"sbt\" with any arguments"
     )
     assertEquals(
       Hosts(Set("a.com"), NetworkAccess.Fetch).describe,

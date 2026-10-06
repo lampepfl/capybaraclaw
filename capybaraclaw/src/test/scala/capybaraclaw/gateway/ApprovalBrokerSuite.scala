@@ -147,7 +147,10 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     val (allowed, message) =
       answer(broker.oracle(sessionId)(itemsRequest("exec", "git", "sbt")))
     assert(!allowed)
-    assert(message.exists(_.contains("Running \"sbt\" needs")), message)
+    assert(
+      message.exists(_.contains("Running \"sbt\" with any arguments needs")),
+      message
+    )
     assertEquals(
       port.approvalRequests.toArray.toList
         .map(_.asInstanceOf[ApprovalRequest].permission),
@@ -314,4 +317,31 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     assertEquals(
       port.approvalRequests.poll().nn.permission,
       Permission.Plugin("demo", "read", Set.empty)
+    )
+
+  test("a request the port fails to show is dropped and asked again"):
+    val broker = ApprovalBroker()
+    val failures = java.util.concurrent.atomic.AtomicInteger(1)
+    val port = new FakePort(SlackPort.Id, supportsApprovals = true):
+      override def requestApproval(
+          sessionId: SessionId,
+          origin: Origin,
+          request: ApprovalRequest
+      ): Unit =
+        if failures.getAndDecrement() > 0 then
+          throw RuntimeException("slack is down")
+        super.requestApproval(sessionId, origin, request)
+    broker.beginTurn(sessionId, port, origin)
+    val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!allowed)
+    assert(message.exists(_.contains("could not reach the user")), message)
+    assertEquals(
+      broker.resolve(sessionId, None, ApprovalDecision.Approve),
+      Left("No pending permission requests in this session.")
+    )
+    val (retried, _) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!retried)
+    assertEquals(
+      Option(port.approvalRequests.poll()).map(_.permission),
+      Some(Permission.Files("/data", Permission.FileAccess.ReadWrite))
     )
