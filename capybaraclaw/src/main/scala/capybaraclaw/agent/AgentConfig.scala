@@ -51,7 +51,8 @@ case class AgentConfig(
     provider: Provider = Provider.OpenRouter,
     model: String = "minimax/minimax-m2.7",
     maxTokens: Int = 16000,
-    classifiedPaths: List[String] = Nil
+    classifiedPaths: List[String] = Nil,
+    memorySnapshot: MemorySnapshot = MemorySnapshot.empty
 ):
   def toLLMConfig: LLMConfig =
     LLMConfig(
@@ -69,7 +70,10 @@ object AgentConfig:
     * file, an unknown key, a wrong-typed field or an unknown provider raises
     * [[ConfigError]] with a message naming the file and field.
     */
-  def load(workDir: String): AgentConfig =
+  def load(
+      workDir: String,
+      memorySnapshot: MemorySnapshot = MemorySnapshot.empty
+  ): AgentConfig =
     val file = java.io.File(workDir, "claw.json")
     val path = file.getPath
     val obj =
@@ -109,7 +113,8 @@ object AgentConfig:
       classifiedPaths =
         field(obj, path, "classified_paths", "an array of non-empty strings")(
           _.arr.map(nonBlankString).toList
-        ).getOrElse(Nil)
+        ).getOrElse(Nil),
+      memorySnapshot = memorySnapshot
     )
 
   /** Fail on keys outside [[KnownKeys]]: a typo such as `classifed_paths` would

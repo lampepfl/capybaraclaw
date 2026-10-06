@@ -8,10 +8,6 @@ Working directory: {{work_dir}}
 File system access is restricted to this directory. When using requestFileSystem, always use this path as the root.
 </environment>
 
-<config>
-{{config}}
-</config>
-
 <library_api>
 The REPL has the following library API pre-loaded (all functions available at top level):
 

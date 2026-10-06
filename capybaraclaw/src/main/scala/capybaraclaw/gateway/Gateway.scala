@@ -28,7 +28,7 @@ class Gateway(
     clawFactory: (
         String,
         List[tacit.agents.llm.endpoint.Message]
-    ) => ClawAgent = (wd, hist) => ClawAgent(wd, initialMessages = hist)
+    ) => ClawAgent
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
   private val portsById: Map[PortId, Port] = ports.map(p => p.id -> p).toMap
