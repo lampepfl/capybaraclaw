@@ -36,6 +36,32 @@ class ReplEnvironmentSuite extends munit.FunSuite:
     val result = env.repl.execute("pluginMarker")
     assert(result.output.contains("42"), result.output)
 
+  test("the agent cannot change plugins/, claw.json or CLAW.md"):
+    // Under the test JVM's working directory, which tacit allows as a root
+    // until a later change bounds file access to the workdir itself.
+    val target = Files.createDirectories(Path.of("target"))
+    val dir = Files.createTempDirectory(target, "claw-read-only").toRealPath()
+    try
+      Files.writeString(dir.resolve("CLAW.md"), "be nice")
+      val env = ReplEnvironment(dir.toString, Nil)
+      def run(code: String): String =
+        val r = env.repl.execute(s"""requestFileSystem("$dir") { $code }""")
+        r.output + r.error.getOrElse("")
+      assert(run(s"""access("$dir/CLAW.md").read()""").contains("be nice"))
+      for path <- List("plugins/x.jar", "PLUGINS/x.jar", "claw.json", "CLAW.md")
+      do
+        val plain = run(s"""access("$dir/$path").write("x")""")
+        assert(plain.contains("read-only"), s"$path: $plain")
+        val classified =
+          run(s"""writeClassified("$dir/$path", classify("x"))""")
+        assert(classified.contains("read-only"), s"$path: $classified")
+      run(s"""access("$dir/notes.txt").write("x")""")
+      assertEquals(Files.readString(dir.resolve("CLAW.md")), "be nice")
+      assert(Files.exists(dir.resolve("notes.txt")))
+      assert(!Files.exists(dir.resolve("plugins")))
+      assert(!Files.exists(dir.resolve("claw.json")))
+    finally deleteRecursively(dir)
+
   private def deleteRecursively(path: Path): Unit =
     if Files.exists(path) then
       val stream = Files.walk(path)
