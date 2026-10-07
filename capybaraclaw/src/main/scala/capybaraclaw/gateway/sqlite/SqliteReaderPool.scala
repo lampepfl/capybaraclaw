@@ -33,6 +33,8 @@ private[sqlite] class SqliteReaderPool(dbFile: File, size: Int)
         queue.put(c)
       (opened.toList, queue)
     catch
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
       case e: Throwable =>
         opened.foreach: c =>
           bestEffort:
@@ -46,6 +48,8 @@ private[sqlite] class SqliteReaderPool(dbFile: File, size: Int)
       SqliteJdbc.execute(c, "PRAGMA query_only = 1")
       c
     catch
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
       case e: Throwable =>
         bestEffort:
           c.close()

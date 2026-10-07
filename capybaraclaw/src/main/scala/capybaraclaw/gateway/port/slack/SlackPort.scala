@@ -183,9 +183,9 @@ class SlackPort(bot: SlackApi) extends Port:
 
   def shutdown(): Unit =
     try outCh.close()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
     try bot.shutdown()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
 
   /** A DM is [[Conversation.Direct]]; a channel, a group DM and any channel
     * not seen in a DM are shared.

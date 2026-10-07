@@ -28,6 +28,7 @@ import java.util.concurrent.{
 }
 import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
 
 // --- Test doubles ---
 
@@ -132,7 +133,7 @@ class FakePort(
 
   def shutdown(): Unit =
     try inCh.close()
-    catch case _: Throwable => ()
+    catch case NonFatal(_) => ()
 
   def push(msg: GatewayMessage): Unit =
     inCh.sendImmediately(msg)

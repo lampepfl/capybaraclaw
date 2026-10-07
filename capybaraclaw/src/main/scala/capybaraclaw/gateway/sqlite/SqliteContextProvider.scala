@@ -47,6 +47,8 @@ class SqliteContextProvider(
   private val readers: SqliteReaderPool =
     try SqliteReaderPool(dbFile, size = 2)
     catch
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
       case e: Throwable =>
         bestEffort:
           writer.close()
@@ -191,6 +193,8 @@ class SqliteContextProvider(
       SqliteJdbc.execute(c, "PRAGMA journal_size_limit = 67108864") /* 64 MiB */
       c
     catch
+      // Throwable, not NonFatal: this closes and rethrows, so nothing is
+      // swallowed, and an interrupt or fatal error must not leak the connection.
       case e: Throwable =>
         bestEffort:
           c.close()
