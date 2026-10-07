@@ -82,15 +82,24 @@ class RejectingPort(override val id: PortId) extends FakePort(id):
 /** In-memory Port that lets tests push inbound messages and capture outbound replies. */
 class FakePort(
     override val id: PortId,
-    conversationOf: Origin => Conversation = _ => Conversation.Group("C-fake")
+    conversationOf: Origin => Conversation = _ => Conversation.Group("C-fake"),
+    override val supportsApprovals: Boolean = false
 ) extends Port:
-  private val inCh = UnboundedChannel[GatewayMessage]()
+  private val inCh = UnboundedChannel[Inbound]()
+  val approvalRequests = LinkedBlockingQueue[ApprovalRequest]()
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
   private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
   private val toolCalls = LinkedBlockingQueue[(String, String)]()
 
-  def incoming: ReadableChannel[GatewayMessage] = inCh.asReadable
+  def incoming: ReadableChannel[Inbound] = inCh.asReadable
+
+  override def requestApproval(
+      sessionId: SessionId,
+      origin: Origin,
+      request: ApprovalRequest
+  ): Unit =
+    approvalRequests.put(request)
 
   override def conversation(origin: Origin): Conversation =
     conversationOf(origin)
@@ -135,7 +144,7 @@ class FakePort(
     try inCh.close()
     catch case NonFatal(_) => ()
 
-  def push(msg: GatewayMessage): Unit =
+  def push(msg: Inbound): Unit =
     inCh.sendImmediately(msg)
 
   def nextReply(
@@ -300,7 +309,8 @@ class GatewaySuite extends munit.FunSuite:
       historySeen: ConcurrentLinkedQueue[List[Message]] =
         ConcurrentLinkedQueue(),
       gatewayWorkDir: String = workDir,
-      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue()
+      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
+      approvals: ApprovalBroker = ApprovalBroker()
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     runGatewayWithResult(
       ports,
@@ -309,7 +319,8 @@ class GatewaySuite extends munit.FunSuite:
       created,
       historySeen,
       gatewayWorkDir,
-      accessSeen
+      accessSeen,
+      approvals
     )(body)
 
   private def runGatewayWithResult[R](
@@ -319,10 +330,17 @@ class GatewaySuite extends munit.FunSuite:
       created: AtomicInteger,
       historySeen: ConcurrentLinkedQueue[List[Message]],
       gatewayWorkDir: String,
-      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue()
+      accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
+      approvals: ApprovalBroker = ApprovalBroker()
   )(body: Async.Spawn ?=> Gateway => R): R =
-    val factory: (String, SessionId, List[Message], MemoryAccess) => ClawAgent =
-      (wd, sid, hist, access) =>
+    val factory: (
+        String,
+        SessionId,
+        List[Message],
+        MemoryAccess,
+        String => String
+    ) => ClawAgent =
+      (wd, sid, hist, access, _) =>
         created.incrementAndGet()
         historySeen.offer(hist)
         accessSeen.offer(access)
@@ -340,12 +358,75 @@ class GatewaySuite extends munit.FunSuite:
     )
 
     Async.blocking:
-      val gateway = Gateway(gatewayWorkDir, ports, cp, memory, factory)
+      val gateway =
+        Gateway(gatewayWorkDir, ports, cp, memory, factory, approvals)
       val gwFut = Future(gateway.run())
       try body(gateway)
       finally
         gateway.shutdown()
         gwFut.awaitResult
+
+  private def fileSystemRequest(root: String): String =
+    ujson.write(
+      ujson.Obj("kind" -> "filesystem", "root" -> root, "resolved" -> root)
+    )
+
+  test("an approval reply grants the root and tells the agent to retry"):
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id, supportsApprovals = true)
+    val approvals = ApprovalBroker()
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("retrying"))),
+      created = AtomicInteger(0),
+      approvals = approvals
+    ) { _ =>
+      val origin = externalOrigin(SlackPort.Id, "U_alice", "C1")
+      val sessionId = cp.resolveOrCreateHandle(workDir, handle("C1"))
+      approvals.beginTurn(sessionId, port, origin)
+      val denial = approvals.oracle(sessionId)(fileSystemRequest("/outside"))
+      approvals.endTurn(sessionId)
+      assert(denial.contains("permission request #1"), denial)
+      assertEquals(
+        port.approvalRequests.poll().nn.permission,
+        Permission.Files("/outside", Permission.FileAccess.ReadWrite)
+      )
+
+      port.push(ApprovalReply(origin, Some(1), ApprovalDecision.Approve))
+
+      assertEquals(port.nextReply().text, "retrying")
+      val told = cp.log.collect { case (`sessionId`, m) => m.text }
+      assert(
+        told.exists(
+          _.contains(
+            "I approved read and write access to files under \"/outside\""
+          )
+        ),
+        told.toString
+      )
+      assertEquals(
+        approvals.oracle(sessionId)(fileSystemRequest("/outside/sub")),
+        ujson.write(ujson.Obj("allow" -> true))
+      )
+    }
+
+  test("an approval reply for an unknown request is rejected"):
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id, supportsApprovals = true)
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(Nil),
+      created = AtomicInteger(0)
+    ) { _ =>
+      val origin = externalOrigin(SlackPort.Id, "U_alice", "C1")
+      port.push(ApprovalReply(origin, Some(9), ApprovalDecision.Deny))
+      assertEquals(
+        port.nextRejection().text,
+        "No pending permission request #9 in this session."
+      )
+    }
 
   test("routes same Slack handle to one runner across multiple users"):
     val cp = FakeContextProvider()

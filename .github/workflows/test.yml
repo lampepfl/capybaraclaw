@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: warcholjakub/tacit
-          ref: b9f83d15b6d2d94fd9301055287c0fad13a36007
+          ref: 7b0f7a9a005881e5912d83455bdad76fcd19fe70
           path: tacit
       - name: Publish tacit locally
         working-directory: tacit

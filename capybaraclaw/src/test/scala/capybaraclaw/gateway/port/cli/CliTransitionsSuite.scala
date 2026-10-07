@@ -1,6 +1,10 @@
 package capybaraclaw.gateway.port.cli
 
 import capybaraclaw.gateway.{
+  Permission,
+  ApprovalDecision,
+  ApprovalReply,
+  ApprovalRequest,
   GatewayMessage,
   Origin,
   SessionId,
@@ -34,6 +38,107 @@ class CliTransitionsSuite extends FunSuite:
     ),
     turnCount = 1
   )
+
+  /** Permission requests */
+
+  test(
+    "UserInput /approve: sends an approval for the latest request and starts a turn"
+  ):
+    val r = transition(idle, UserInput("/approve"), ctx)
+    assert(r.state.turnInFlight)
+    assertEquals(r.state.turnCount, idle.turnCount)
+    assertEquals(
+      r.effects.head,
+      SendOutbound(ApprovalReply(ctx.origin, None, ApprovalDecision.Approve))
+    )
+
+  test("UserInput /deny #2: sends a denial of request 2"):
+    val r = transition(idle, UserInput("/deny #2"), ctx)
+    assertEquals(
+      r.effects.head,
+      SendOutbound(ApprovalReply(ctx.origin, Some(2), ApprovalDecision.Deny))
+    )
+
+  test("UserInput /approve with a bad id: usage error, state unchanged"):
+    val r = transition(idle, UserInput("/approve soon"), ctx)
+    assertEquals(r.state, idle)
+    assertEquals(
+      r.effects,
+      List(
+        Render(Role.Error, "Usage: /approve [request number], e.g. /approve 3.")
+      )
+    )
+
+  private val request =
+    ApprovalRequest(
+      3,
+      SessionId.random(),
+      Permission.Files("/data", Permission.FileAccess.ReadWrite)
+    )
+
+  test("ApprovalRequested while running: queues the request for the menu"):
+    val r = transition(midTurn, ApprovalRequested(request), ctx)
+    assertEquals(r.state, midTurn.copy(pendingApprovals = List(request)))
+    assertEquals(r.effects, Nil)
+
+  test("ApprovalRequested without menus: tells how to answer"):
+    val r = transition(
+      midTurn,
+      ApprovalRequested(request),
+      ctx.copy(menusSupported = false)
+    )
+    assertEquals(r.effects, List(RenderApprovalRequest(request)))
+
+  test("ApprovalRequested after running=false: no effects"):
+    val r =
+      transition(idle.copy(running = false), ApprovalRequested(request), ctx)
+    assertEquals(r.effects, Nil)
+
+  test("nextInput: a pending request is asked before the next line"):
+    val pending = idle.copy(pendingApprovals = List(request))
+    assertEquals(
+      nextInput(pending, menusSupported = true),
+      Some(InputRequest.AskApproval(request))
+    )
+    assertEquals(
+      nextInput(pending, menusSupported = false),
+      Some(InputRequest.ReadLine)
+    )
+    assertEquals(
+      nextInput(idle, menusSupported = true),
+      Some(InputRequest.ReadLine)
+    )
+    assertEquals(nextInput(midTurn, menusSupported = true), None)
+
+  test("ApprovalChosen: sends the decision and waits for the agent"):
+    val pending = idle.copy(pendingApprovals = List(request))
+    val r =
+      transition(pending, ApprovalChosen(request, ApprovalDecision.Deny), ctx)
+    assert(r.state.turnInFlight)
+    assertEquals(r.state.pendingApprovals, Nil)
+    assertEquals(r.state.turnCount, idle.turnCount)
+    assertEquals(
+      r.effects.head,
+      SendOutbound(ApprovalReply(ctx.origin, Some(3), ApprovalDecision.Deny))
+    )
+
+  test(
+    "ApprovalPostponed: drops it from the queue and says how to answer later"
+  ):
+    val pending = idle.copy(pendingApprovals = List(request))
+    val r = transition(pending, ApprovalPostponed(request), ctx)
+    assertEquals(r.state, idle)
+    assert(
+      r.effects.exists:
+        case Render(Role.Permission, text) => text.contains("/approve 3")
+        case _                             => false
+    )
+
+  test("UserInput /approve 3: answers request 3 and clears it from the queue"):
+    val other = request.copy(id = 4)
+    val pending = idle.copy(pendingApprovals = List(request, other))
+    val r = transition(pending, UserInput("/approve 3"), ctx)
+    assertEquals(r.state.pendingApprovals, List(other))
 
   /** UserInput */
 

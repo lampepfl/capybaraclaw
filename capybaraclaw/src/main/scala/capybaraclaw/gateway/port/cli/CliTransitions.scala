@@ -1,7 +1,14 @@
 package capybaraclaw.gateway.port.cli
 
 import capybaraclaw.Throwables
-import capybaraclaw.gateway.{GatewayMessage, Origin}
+import capybaraclaw.gateway.{
+  ApprovalDecision,
+  ApprovalReply,
+  ApprovalRequest,
+  GatewayMessage,
+  Inbound,
+  Origin
+}
 
 /** Pure logic of the CLI port. Runner lives in [[CliPort]]. */
 object CliTransitions:
@@ -13,6 +20,9 @@ object CliTransitions:
     case AssistantTextComplete(text: String)
     case ErrorText(text: String)
     case ToolCall(toolName: String, args: String)
+    case ApprovalRequested(request: ApprovalRequest)
+    case ApprovalChosen(request: ApprovalRequest, decision: ApprovalDecision)
+    case ApprovalPostponed(request: ApprovalRequest)
     case SpinnerTick(nowMillis: Long)
     case HintTick(buffer: String)
     case InputReadFailed(error: Throwable)
@@ -31,7 +41,8 @@ object CliTransitions:
       running: Boolean,
       spinner: Option[SpinnerState],
       turnCount: Int,
-      turnInFlight: Boolean
+      turnInFlight: Boolean,
+      pendingApprovals: List[ApprovalRequest]
   )
 
   object State:
@@ -40,11 +51,29 @@ object CliTransitions:
         running = true,
         spinner = None,
         turnCount = 0,
-        turnInFlight = false
+        turnInFlight = false,
+        pendingApprovals = Nil
       )
 
   enum Role:
-    case User, Assistant, Error, Tool
+    case User, Assistant, Error, Tool, Permission
+
+  /** What the input reader does next, between turns. */
+  enum InputRequest:
+    case ReadLine
+    case AskApproval(request: ApprovalRequest)
+
+  /** `None` while a turn runs or after quitting. Pending permission requests
+    * are asked one by one before the next line is read, unless the terminal
+    * cannot show a menu (then `/approve` and `/deny` answer them).
+    */
+  def nextInput(state: State, menusSupported: Boolean): Option[InputRequest] =
+    if !state.running || state.turnInFlight then None
+    else
+      state.pendingApprovals.headOption
+        .filter(_ => menusSupported)
+        .map(InputRequest.AskApproval(_))
+        .orElse(Some(InputRequest.ReadLine))
 
   enum CliEffect:
     case Render(role: Role, text: String)
@@ -56,7 +85,8 @@ object CliTransitions:
     case SetEcho(enabled: Boolean)
     case StartSpinnerFiber
     case CancelSpinnerFiber
-    case SendOutbound(msg: GatewayMessage)
+    case SendOutbound(msg: Inbound)
+    case RenderApprovalRequest(request: ApprovalRequest)
     case RenderSessionsList
     case RenderCurrentInfo
     case RenderHintStatus(text: String)
@@ -65,7 +95,8 @@ object CliTransitions:
       now: Long,
       newSpinnerWordIdx: Int,
       shouldRenderSpinner: Boolean,
-      origin: Origin
+      origin: Origin,
+      menusSupported: Boolean = true
   )
 
   final case class TransitionResult(
@@ -114,6 +145,37 @@ object CliTransitions:
           )
         else TransitionResult(state, Nil)
 
+      case ApprovalRequested(request) =>
+        if !state.running then TransitionResult(state, Nil)
+        else
+          TransitionResult(
+            state.copy(pendingApprovals =
+              state.pendingApprovals.filterNot(_.id == request.id) :+ request
+            ),
+            Option
+              .unless(ctx.menusSupported)(RenderApprovalRequest(request))
+              .toList
+          )
+
+      case ApprovalChosen(request, decision) =>
+        startTurn(
+          withoutPending(state, request),
+          ctx,
+          ApprovalReply(ctx.origin, Some(request.id), decision),
+          countsAsTurn = false
+        )
+
+      case ApprovalPostponed(request) =>
+        TransitionResult(
+          withoutPending(state, request),
+          List(
+            Render(
+              Role.Permission,
+              s"#${request.id} postponed. Answer later with /approve ${request.id} or /deny ${request.id}."
+            )
+          )
+        )
+
       case TurnFinished =>
         TransitionResult(
           state.copy(spinner = None, turnInFlight = false),
@@ -159,6 +221,11 @@ object CliTransitions:
           cancelSpinnerIfActive(state)
         )
 
+  private def withoutPending(state: State, request: ApprovalRequest): State =
+    state.copy(pendingApprovals =
+      state.pendingApprovals.filterNot(_.id == request.id)
+    )
+
   private def cancelSpinnerIfActive(state: State): List[CliEffect] =
     state.spinner.map(_ => CliEffect.CancelSpinnerFiber).toList
 
@@ -176,12 +243,45 @@ object CliTransitions:
       TransitionResult(state, List(RenderSessionsList))
     else if CliCommands.isCurrent(trimmed) then
       TransitionResult(state, List(RenderCurrentInfo))
-    else if CliCommands.isSlashCommand(trimmed) then
-      TransitionResult(
-        state,
-        List(Render(Role.Error, unknownCommandText(trimmed)))
-      )
-    else if state.turnInFlight then
+    else
+      CliCommands.parseApproval(trimmed) match
+        case Some(Left(usage)) =>
+          TransitionResult(state, List(Render(Role.Error, usage)))
+        case Some(Right(command)) =>
+          val answered = command.requestId match
+            case Some(id) => state.pendingApprovals.filterNot(_.id == id)
+            case None     => state.pendingApprovals.dropRight(1)
+          startTurn(
+            state.copy(pendingApprovals = answered),
+            ctx,
+            ApprovalReply(ctx.origin, command.requestId, command.decision),
+            countsAsTurn = false
+          )
+        case None if CliCommands.isSlashCommand(trimmed) =>
+          TransitionResult(
+            state,
+            List(Render(Role.Error, unknownCommandText(trimmed)))
+          )
+        case None =>
+          startTurn(
+            state,
+            ctx,
+            GatewayMessage(ctx.origin, raw),
+            countsAsTurn = true
+          )
+
+  /** Sends `outbound` and waits for the agent's turn, unless one is running.
+    * Approval replies do not count towards `turnCount`: the gateway may reject
+    * them before any agent turn runs.
+    */
+  private def startTurn(
+      state: State,
+      ctx: TransitionContext,
+      outbound: Inbound,
+      countsAsTurn: Boolean
+  ): TransitionResult =
+    import CliEffect.*
+    if state.turnInFlight then
       TransitionResult(
         state,
         List(Render(Role.Error, "Turn already in progress. Please wait."))
@@ -195,11 +295,11 @@ object CliTransitions:
       TransitionResult(
         state.copy(
           spinner = Some(spinnerState),
-          turnCount = state.turnCount + 1,
+          turnCount = state.turnCount + (if countsAsTurn then 1 else 0),
           turnInFlight = true
         ),
         List(
-          SendOutbound(GatewayMessage(ctx.origin, raw)),
+          SendOutbound(outbound),
           RenderSpinner(spinnerState, ctx.now),
           SetEcho(false),
           StartSpinnerFiber

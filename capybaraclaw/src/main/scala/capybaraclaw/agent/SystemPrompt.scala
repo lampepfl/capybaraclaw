@@ -16,12 +16,12 @@ private[agent] object SystemPrompt:
 
   private val resourceLoader = getClass.getClassLoader.nn
 
-  def build(config: AgentConfig): String =
+  def build(config: AgentConfig, apiReference: String): String =
     val sections = List(
       Some(
         renderResource(
           "prompts/system.md",
-          Map("work_dir" -> config.workDir)
+          Map("work_dir" -> config.workDir, "api_reference" -> apiReference)
         )
       ),
       Option.when(config.classifiedPaths.nonEmpty):

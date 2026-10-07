@@ -69,6 +69,7 @@ lazy val capybaraclaw = project
       "org.glassfish.tyrus.bundles" % "tyrus-standalone-client" % "1.21",
       "org.jline" % "jline-reader" % "4.0.12",
       "org.jline" % "jline-terminal-jni" % "4.0.12",
+      "org.jline" % "jline-prompt" % "4.0.12",
       "xyz.matthieucourt" %% "layoutz" % "0.7.0",
       "com.github.alexarchambault" %% "case-app" % "2.1.0",
       "org.xerial" % "sqlite-jdbc" % "3.53.0.0",

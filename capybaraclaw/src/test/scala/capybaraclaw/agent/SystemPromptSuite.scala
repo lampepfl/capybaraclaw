@@ -62,7 +62,7 @@ class SystemPromptSuite extends munit.FunSuite:
           |</project_instructions>""".stripMargin +
         "\n\n"
 
-    val built = SystemPrompt.build(config)
+    val built = SystemPrompt.build(config, "the API")
     assert(built.startsWith(expected), built)
     val boundary = SystemPromptSuite.boundaryOf(built)
     assertEquals(
@@ -73,7 +73,7 @@ class SystemPromptSuite extends munit.FunSuite:
   workDir.test("build emits only the system section without memory"): dir =>
     val config = AgentConfig(workDir = dir.toString)
     assertEquals(
-      SystemPrompt.build(config),
+      SystemPrompt.build(config, "the API"),
       SystemPromptSuite.systemSection(config)
     )
 
@@ -102,8 +102,10 @@ class SystemPromptSuite extends munit.FunSuite:
       workDir = dir.toString,
       memorySnapshot = SystemPromptSuite.snapshot
     )
-    val first = SystemPromptSuite.boundaryOf(SystemPrompt.build(config))
-    val second = SystemPromptSuite.boundaryOf(SystemPrompt.build(config))
+    val first =
+      SystemPromptSuite.boundaryOf(SystemPrompt.build(config, "the API"))
+    val second =
+      SystemPromptSuite.boundaryOf(SystemPrompt.build(config, "the API"))
     assertNotEquals(first, second)
     assert(first.matches("[0-9a-f]{16}"), first)
 
@@ -111,7 +113,7 @@ object SystemPromptSuite:
   private def systemSection(config: AgentConfig): String =
     SystemPrompt.renderResource(
       "prompts/system.md",
-      Map("work_dir" -> config.workDir)
+      Map("work_dir" -> config.workDir, "api_reference" -> "the API")
     )
 
   private val snapshot: MemorySnapshot = MemorySnapshot(
