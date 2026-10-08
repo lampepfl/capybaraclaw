@@ -345,3 +345,9 @@ class ApprovalBrokerSuite extends munit.FunSuite:
       Option(port.approvalRequests.poll()).map(_.permission),
       Some(Permission.Files("/data", Permission.FileAccess.ReadWrite))
     )
+
+  test("a request naming too much is denied without asking"):
+    val (broker, port) = askingBroker()
+    val many = (1 to 300).map(i => s"host-$i.example.com")
+    assert(!answer(broker.oracle(sessionId)(itemsRequest("network", many*)))._1)
+    assert(port.approvalRequests.isEmpty)
