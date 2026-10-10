@@ -5,6 +5,7 @@ import capybaraclaw.gateway.port.{Port, ReplyStream}
 import gears.async.{Async, Future, UnboundedChannel}
 import org.slf4j.LoggerFactory
 import scala.annotation.tailrec
+import scala.collection.mutable
 import scala.util.control.NonFatal
 import tacit.agents.llm.agentic.{AgentError, AgentRun, AgentStreamEvent}
 import tacit.agents.llm.endpoint.{Content, Message, StreamEvent}
@@ -26,9 +27,11 @@ private final case class TurnResult(
 )
 
 /** One runner per `sessionId`. Owns an inbox, processes messages one turn at a time
-  * on its own fiber. While a turn is running, newly-arriving inbox messages are
-  * forwarded as live steers on the active `AgentRun` so the LLM can react to them
-  * before finishing its response.
+  * on its own fiber. While a turn is running, newly-arriving messages from the
+  * turn's sender are forwarded as live steers on the active `AgentRun` so the LLM
+  * can react to them before finishing its response. Messages from anyone else
+  * wait for a turn of their own: a turn runs under its sender's permission
+  * grants, which nobody else may steer.
   *
   * Messages are tagged `"[userId] text"` on the way into the LLM so a shared-thread
   * agent can still tell who said what.
@@ -41,6 +44,11 @@ class AgentRunner(
 ):
   private val logger = LoggerFactory.getLogger(classOf[AgentRunner])
   private val inbox = UnboundedChannel[RoutedGatewayMessage]()
+
+  /** Messages that arrived during someone else's turn, in arrival order; they
+    * are taken before the inbox. Only touched on the runner's fiber.
+    */
+  private val held = mutable.ArrayDeque[RoutedGatewayMessage]()
 
   def deliver(routed: RoutedGatewayMessage): Unit =
     try inbox.sendImmediately(routed)
@@ -55,7 +63,9 @@ class AgentRunner(
 
   @tailrec
   private def runLoop()(using Async.Spawn): Unit =
-    inbox.read() match
+    val next =
+      if held.nonEmpty then Right(held.removeHead()) else inbox.read()
+    next match
       case Right(routed) =>
         val msg = routed.message
         val replyPort = routed.replyPort
@@ -104,12 +114,12 @@ class AgentRunner(
       readEvent(run) match
         case Emitted(Stream(Delta(text))) =>
           val next = reply.delta(text)
-          drainSteers(run)
+          drainSteers(run, msg.origin)
           consume(next, finalText, toolInputs, aborted)
         case Emitted(Stream(Done(response))) =>
           val nextToolInputs = toolInputs ++ response.message.content.collect:
             case Content.ToolUse(id, _, input) => id -> input
-          drainSteers(run)
+          drainSteers(run, msg.origin)
           consume(reply, response.message.text, nextToolInputs, aborted)
         case Emitted(ToolResult(id, toolName, _)) =>
           val args = toolInputs.getOrElse(id, "")
@@ -117,10 +127,10 @@ class AgentRunner(
           catch
             case NonFatal(e) =>
               logger.error(s"[runner $sessionId] sendToolCall failed", e)
-          drainSteers(run)
+          drainSteers(run, msg.origin)
           consume(reply, finalText, toolInputs, aborted)
         case Emitted(_) =>
-          drainSteers(run)
+          drainSteers(run, msg.origin)
           consume(reply, finalText, toolInputs, aborted)
         case Failed(error) =>
           if !aborted then
@@ -157,28 +167,46 @@ class AgentRunner(
       case Right(Left(error))  => RunEvent.Failed(error)
       case Left(_)             => RunEvent.Closed
 
-  /** Drain any inbox items that arrived mid-turn, forwarding each as a steer on the
-    * active run. Persist only after a successful steer: a rejected steer (race with
-    * run termination) is re-delivered to the inbox so the next turn picks it up, and
-    * persisting there instead of here keeps the transcript free of duplicates.
+  /** Forward messages from `sender` that arrived mid-turn as steers on the
+    * active run, in order; everyone else's stay held for a later turn. Persist
+    * only after a successful steer: a rejected steer (race with run
+    * termination) stays held so the next turn picks it up, and persisting
+    * there instead of here keeps the transcript free of duplicates.
     */
-  @tailrec
-  private def drainSteers(run: AgentRun): Unit =
-    inbox.readSource.poll() match
-      case Some(Right(m)) =>
-        val t = tag(m.message)
-        run.steer(t) match
-          case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
-            try contextProvider.append(sessionId, Message.user(t))
-            catch
-              case NonFatal(e) =>
-                logger.error(s"[runner $sessionId] failed to persist steer", e)
-            drainSteers(run)
-          case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
-            try inbox.sendImmediately(m)
-            catch case _: gears.async.ChannelClosedException => ()
-      case _ =>
-        ()
+  private def drainSteers(run: AgentRun, sender: Origin): Unit =
+    @tailrec
+    def pollInbox(): Unit =
+      inbox.readSource.poll() match
+        case Some(Right(m)) =>
+          held.append(m)
+          pollInbox()
+        case _ => ()
+
+    @tailrec
+    def steerNext(): Unit =
+      held.indexWhere(m => sameSender(m.message.origin, sender)) match
+        case -1 => ()
+        case i  =>
+          val t = tag(held(i).message)
+          run.steer(t) match
+            case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
+              val _ = held.remove(i)
+              try contextProvider.append(sessionId, Message.user(t))
+              catch
+                case NonFatal(e) =>
+                  logger.error(
+                    s"[runner $sessionId] failed to persist steer",
+                    e
+                  )
+              steerNext()
+            case tacit.agents.llm.agentic.SteerOutcome.RejectedRunEnded =>
+              ()
+
+    pollInbox()
+    steerNext()
+
+  private def sameSender(a: Origin, b: Origin): Boolean =
+    a.port == b.port && a.user == b.user
 
   private def tag(m: GatewayMessage): String =
     s"[${m.origin.user}] ${m.text}"

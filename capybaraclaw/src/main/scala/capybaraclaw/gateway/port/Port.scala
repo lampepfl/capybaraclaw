@@ -2,6 +2,7 @@ package capybaraclaw.gateway.port
 
 import capybaraclaw.gateway.{
   ApprovalRequest,
+  ApprovalResolution,
   Conversation,
   Inbound,
   Origin,
@@ -60,6 +61,15 @@ trait Port extends AutoCloseable:
       sessionId: SessionId,
       origin: Origin,
       request: ApprovalRequest
+  ): Unit = ()
+
+  /** The gateway acted on an `ApprovalReply` from this port, sent by `by`:
+    * the port can now close the request's prompt with the outcome.
+    */
+  def approvalResolved(
+      sessionId: SessionId,
+      resolution: ApprovalResolution,
+      by: Origin
   ): Unit = ()
 
   /** Called after a turn for `sessionId` finishes, regardless of whether it

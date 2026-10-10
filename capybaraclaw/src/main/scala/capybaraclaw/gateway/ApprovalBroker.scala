@@ -11,15 +11,31 @@ import scala.annotation.tailrec
 import scala.util.Try
 import scala.util.control.NonFatal
 
+/** What became of an answer to a permission request. */
+enum ApprovalResolution:
+  case Answered(request: ApprovalRequest, decision: ApprovalDecision)
+
+  /** Approved, but the requester's roles no longer allow it: closed without
+    * a grant.
+    */
+  case Withdrawn(request: ApprovalRequest, reason: String)
+
+  def request: ApprovalRequest
+
 /** Answers TACIT's permission oracle for every session and records the users'
   * decisions. Agent code is never kept waiting: a request outside the granted
   * roots is denied right away with a message naming the pending request, the
   * user answers it on their port, and the agent retries once told.
   *
+  * Requests are made on behalf of the person whose turn is running, and only
+  * for what their roles in [[Identities]] allow; anything else is denied
+  * without asking. Roles are looked up on every decision, so a grant stops
+  * counting as soon as its holder loses the role that allowed it.
+  *
   * Called from REPL threads (the oracle) and from the gateway (turns and
   * replies), so the state is swapped atomically.
   */
-final class ApprovalBroker:
+final class ApprovalBroker(identities: () => Identities):
   import ApprovalBroker.*
 
   private val logger = LoggerFactory.getLogger(classOf[ApprovalBroker])
@@ -39,22 +55,44 @@ final class ApprovalBroker:
   def oracle(sessionId: SessionId): String => String =
     requestJson => decide(sessionId, requestJson)
 
+  /** `by` answers the request: only its requester may, and an approval only
+    * stands if their roles still allow it.
+    */
   def resolve(
       sessionId: SessionId,
       requestId: Option[Int],
-      decision: ApprovalDecision
-  ): Either[String, ApprovalRequest] =
+      decision: ApprovalDecision,
+      by: Origin
+  ): Either[String, ApprovalResolution] =
+    val ids = identities()
+    val person = ids.person(by.port, by.user)
     update: s =>
-      s.approvals.resolve(sessionId, requestId, decision) match
-        case Right((approvals, request)) =>
-          (s.copy(approvals = approvals), Right(request))
-        case Left(error) => (s, Left(error))
+      s.approvals.answerable(Grantee(sessionId, person.id), requestId) match
+        case Left(error)    => (s, Left(error))
+        case Right(request) =>
+          ids.disallowed(person, request.permission) match
+            case Some(part) if decision == ApprovalDecision.Approve =>
+              (
+                s.copy(approvals = s.approvals.withdraw(request.id)),
+                Right(
+                  ApprovalResolution.Withdrawn(
+                    request,
+                    s"the roles of ${person.id} no longer allow ${part.describe}"
+                  )
+                )
+              )
+            case _ =>
+              (
+                s.copy(approvals = s.approvals.resolve(request, decision)),
+                Right(ApprovalResolution.Answered(request, decision))
+              )
 
   private def decide(sessionId: SessionId, requestJson: String): String =
     val outcome = parseRequest(requestJson) match
       case Left(rejection)             => Outcome.Rejected(rejection)
       case Right((permission, reason)) =>
-        update(s => askOrAllow(s, sessionId, permission, reason))
+        val ids = identities()
+        update(s => askOrAllow(s, ids, sessionId, permission, reason))
     outcome match
       case Outcome.Allowed           => allow
       case Outcome.Rejected(message) => deny(message)
@@ -117,40 +155,55 @@ object ApprovalBroker:
       */
     case Asked(request: ApprovalRequest, newPrompt: Option[Turn])
 
-  /** Grant check, channel lookup and request creation as one state change, so
-    * an approval landing in between cannot be missed.
+  /** Role check, grant check, channel lookup and request creation as one
+    * state change, so an approval landing in between cannot be missed.
+    * Outside a turn nobody is asking, so nothing beyond the session's
+    * defaults is allowed.
     */
   private def askOrAllow(
       s: BrokerState,
+      ids: Identities,
       sessionId: SessionId,
       permission: Permission,
       reason: String
   ): (BrokerState, Outcome) =
-    s.approvals.ungranted(sessionId, permission) match
-      case None          => (s, Outcome.Allowed)
-      case Some(missing) =>
-        s.turns.get(sessionId) match
+    s.turns.get(sessionId) match
+      case None =>
+        (
+          s,
+          Outcome.Rejected(
+            s"Denied ${permission.describe}: it needs the user's approval and the user cannot be asked outside a turn."
+          )
+        )
+      case Some(turn) =>
+        val person = ids.person(turn.origin.port, turn.origin.user)
+        val grantee = Grantee(sessionId, person.id)
+        ids.disallowed(person, permission) match
+          case Some(part) =>
+            (
+              s,
+              Outcome.Rejected(
+                s"Denied ${part.describe}: the roles of ${person.id} do not allow it, so they cannot be asked. " +
+                  "Do not retry it; tell the user it is not available to them."
+              )
+            )
           case None =>
-            (
-              s,
-              Outcome.Rejected(
-                s"Denied ${missing.describe}: it needs the user's approval and the user cannot be asked outside a turn."
-              )
-            )
-          case Some(turn) if !turn.port.supportsApprovals =>
-            (
-              s,
-              Outcome.Rejected(
-                s"Denied ${missing.describe}: it needs the user's approval and this channel cannot ask the user."
-              )
-            )
-          case Some(turn) =>
-            val (approvals, request, isNew) =
-              s.approvals.request(sessionId, missing, reason)
-            (
-              s.copy(approvals = approvals),
-              Outcome.Asked(request, Option.when(isNew)(turn))
-            )
+            s.approvals.ungranted(grantee, permission) match
+              case None => (s, Outcome.Allowed)
+              case Some(missing) if !turn.port.supportsApprovals =>
+                (
+                  s,
+                  Outcome.Rejected(
+                    s"Denied ${missing.describe}: it needs the user's approval and this channel cannot ask the user."
+                  )
+                )
+              case Some(missing) =>
+                val (approvals, request, isNew) =
+                  s.approvals.request(grantee, missing, reason)
+                (
+                  s.copy(approvals = approvals),
+                  Outcome.Asked(request, Option.when(isNew)(turn))
+                )
 
   private val allow: String = ujson.write(ujson.Obj("allow" -> true))
 

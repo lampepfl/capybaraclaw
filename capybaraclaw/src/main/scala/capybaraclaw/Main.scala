@@ -4,9 +4,11 @@ import caseapp.*
 
 import capybaraclaw.agent.{ClawAgent, ConfigError, Plugins}
 import capybaraclaw.gateway.{
+  ApprovalBroker,
   Conversation,
   Gateway,
   Identities,
+  IdentitiesFile,
   MemoryDirectory,
   SessionId,
   SessionMetadata
@@ -90,8 +92,12 @@ private object ClawMain extends CaseApp[CliOptions]:
         val (sessionId, workDirFile) =
           bootstrapSession(contextProvider, options, remainingArgs)
         val workDir = workDirFile.getPath
-        val memory = MemoryDirectory.default(Identities.default())
         val cliUser = CliPort.defaultUser
+        val identities = IdentitiesFile(
+          Identities.defaultFile,
+          operator = Some(s"${CliPort.Id}:$cliUser")
+        )
+        val memory = MemoryDirectory.default(identities.current)
         memory.migrateLegacy(memory.person(CliPort.Id, cliUser))
 
         Async.blocking:
@@ -124,7 +130,8 @@ private object ClawMain extends CaseApp[CliOptions]:
                 initialMessages = hist,
                 memory = access,
                 permissionOracle = Some(oracle)
-              )
+              ),
+            approvals = ApprovalBroker(identities.current)
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())

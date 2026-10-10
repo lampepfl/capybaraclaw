@@ -12,17 +12,22 @@ import capybaraclaw.agent.{MemoryAccess, MemoryFile, MemoryScope, MemoryStore}
   *
   *   - `public/MEMORY.md`: read everywhere, curated by administrators
   *   - `persons/<person>/{USER,MEMORY}.md`: only in that person's DMs, on any
-  *     port linked to them in [[Identities]]
+  *     port linked to them in [[Identities]] (looked up when a session
+  *     starts, so a changed link applies to new sessions)
   *   - `channels/<port>/<channel>/MEMORY.md`: only in that channel
   */
-final class MemoryDirectory(val root: File, identities: Identities):
+final class MemoryDirectory(
+    val root: File,
+    identities: () => Identities
+):
   import MemoryDirectory.*
 
   private val logger = LoggerFactory.getLogger(classOf[MemoryDirectory])
 
   private val publicStore = MemoryStore(File(root, "public"))
 
-  def person(port: PortId, user: UserId): Person = identities.person(port, user)
+  def person(port: PortId, user: UserId): Person =
+    identities().person(port, user)
 
   def access(
       port: PortId,
@@ -100,8 +105,8 @@ object MemoryDirectory:
 
   private val LegacyNames = List("MEMORY.md", "USER.md")
 
-  /** `~/.claw/memories/` with `~/.claw/identities.json`. */
-  def default(identities: Identities): MemoryDirectory =
+  /** `~/.claw/memories/`. */
+  def default(identities: () => Identities): MemoryDirectory =
     MemoryDirectory(
       File(System.getProperty("user.home"), ".claw/memories"),
       identities

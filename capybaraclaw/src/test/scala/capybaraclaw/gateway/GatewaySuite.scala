@@ -75,6 +75,36 @@ class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
     else ch.sendImmediately(Left(LLMError("No more stub responses")))
     ch.asReadable
 
+/** Scripted like [[StubEndpoint]], but the first `stream` call waits for
+  * `release`, so a test can send messages while a turn is running; every call
+  * records the messages it was given.
+  */
+class GatedEndpoint(responses: List[ChatResponse]) extends Endpoint:
+  val entered = java.util.concurrent.CountDownLatch(1)
+  val release = java.util.concurrent.CountDownLatch(1)
+  val seen = ConcurrentLinkedQueue[List[Message]]()
+  private val calls = AtomicInteger(0)
+
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] = Left(LLMError("not used"))
+
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
+    val i = calls.getAndIncrement()
+    seen.offer(messages)
+    if i == 0 then
+      entered.countDown()
+      val _ =
+        release.await(FakePort.defaultReplyTimeoutMs, TimeUnit.MILLISECONDS)
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
+    if i < responses.length then
+      ch.sendImmediately(Right(StreamEvent.Done(responses(i))))
+    else ch.sendImmediately(Left(LLMError("No more stub responses")))
+    ch.asReadable
+
 class RejectingPort(override val id: PortId) extends FakePort(id):
   override def validateOriginForReply(origin: Origin): Unit =
     throw IllegalArgumentException("invalid reply origin")
@@ -87,6 +117,7 @@ class FakePort(
 ) extends Port:
   private val inCh = UnboundedChannel[Inbound]()
   val approvalRequests = LinkedBlockingQueue[ApprovalRequest]()
+  val resolutions = LinkedBlockingQueue[ApprovalResolution]()
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
   private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
@@ -100,6 +131,13 @@ class FakePort(
       request: ApprovalRequest
   ): Unit =
     approvalRequests.put(request)
+
+  override def approvalResolved(
+      sessionId: SessionId,
+      resolution: ApprovalResolution,
+      by: Origin
+  ): Unit =
+    resolutions.put(resolution)
 
   override def conversation(origin: Origin): Conversation =
     conversationOf(origin)
@@ -310,7 +348,7 @@ class GatewaySuite extends munit.FunSuite:
         ConcurrentLinkedQueue(),
       gatewayWorkDir: String = workDir,
       accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
-      approvals: ApprovalBroker = ApprovalBroker()
+      approvals: ApprovalBroker = TestIdentities.broker()
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     runGatewayWithResult(
       ports,
@@ -331,7 +369,7 @@ class GatewaySuite extends munit.FunSuite:
       historySeen: ConcurrentLinkedQueue[List[Message]],
       gatewayWorkDir: String,
       accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
-      approvals: ApprovalBroker = ApprovalBroker()
+      approvals: ApprovalBroker = TestIdentities.broker()
   )(body: Async.Spawn ?=> Gateway => R): R =
     val factory: (
         String,
@@ -354,7 +392,7 @@ class GatewaySuite extends munit.FunSuite:
         )
     val memory = MemoryDirectory(
       os.temp.dir(prefix = "claw-gw-mem-").toIO,
-      Identities.empty
+      () => Identities.empty
     )
 
     Async.blocking:
@@ -374,7 +412,7 @@ class GatewaySuite extends munit.FunSuite:
   test("an approval reply grants the root and tells the agent to retry"):
     val cp = FakeContextProvider()
     val port = FakePort(SlackPort.Id, supportsApprovals = true)
-    val approvals = ApprovalBroker()
+    val approvals = TestIdentities.broker()
     runGateway(
       List(port),
       cp,
@@ -405,10 +443,117 @@ class GatewaySuite extends munit.FunSuite:
         ),
         told.toString
       )
+      approvals.beginTurn(sessionId, port, origin)
       assertEquals(
         approvals.oracle(sessionId)(fileSystemRequest("/outside/sub")),
         ujson.write(ujson.Obj("allow" -> true))
       )
+    }
+
+  test("an approval reply from someone other than the requester is rejected"):
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id, supportsApprovals = true)
+    val approvals = TestIdentities.broker()
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(Nil),
+      created = AtomicInteger(0),
+      approvals = approvals
+    ) { _ =>
+      val alice = externalOrigin(SlackPort.Id, "U_alice", "C1")
+      val sessionId = cp.resolveOrCreateHandle(workDir, handle("C1"))
+      approvals.beginTurn(sessionId, port, alice)
+      val _ = approvals.oracle(sessionId)(fileSystemRequest("/outside"))
+      approvals.endTurn(sessionId)
+
+      val bob = externalOrigin(SlackPort.Id, "U_bob", "C1")
+      port.push(ApprovalReply(bob, Some(1), ApprovalDecision.Approve))
+      assertEquals(
+        port.nextRejection().text,
+        "Permission request #1 is not yours to answer."
+      )
+      assert(port.resolutions.isEmpty)
+    }
+
+  test(
+    "approving after losing the role withdraws the request and tells the agent"
+  ):
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id, supportsApprovals = true)
+    val ids =
+      java.util.concurrent.atomic.AtomicReference(TestIdentities.everyoneMayAll)
+    val approvals = ApprovalBroker(() => ids.get())
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("ok"))),
+      created = AtomicInteger(0),
+      approvals = approvals
+    ) { _ =>
+      val alice = externalOrigin(SlackPort.Id, "U_alice", "C1")
+      val sessionId = cp.resolveOrCreateHandle(workDir, handle("C1"))
+      approvals.beginTurn(sessionId, port, alice)
+      val _ = approvals.oracle(sessionId)(fileSystemRequest("/outside"))
+      approvals.endTurn(sessionId)
+      ids.set(Identities.empty)
+
+      port.push(ApprovalReply(alice, Some(1), ApprovalDecision.Approve))
+      assertEquals(port.nextReply().text, "ok")
+      port.resolutions.poll(
+        FakePort.defaultReplyTimeoutMs,
+        TimeUnit.MILLISECONDS
+      ) match
+        case ApprovalResolution.Withdrawn(request, _) =>
+          assertEquals(request.id, 1)
+        case other => fail(s"expected a withdrawal, got $other")
+      val told = cp.log.collect { case (`sessionId`, m) => m.text }
+      assert(
+        told.exists(
+          _.contains("Permission request #1 was withdrawn without a grant")
+        ),
+        told.toString
+      )
+    }
+
+  test("only the turn's sender steers it; others wait for a turn of their own"):
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id)
+    val toolCall = ChatResponse(
+      Message(
+        Role.Assistant,
+        List(Content.ToolUse("call-1", "no_such_tool", "{}"))
+      ),
+      FinishReason.ToolUse
+    )
+    val endpoint = GatedEndpoint(
+      List(toolCall, textResponse("alice done"), textResponse("bob done"))
+    )
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => endpoint,
+      created = AtomicInteger(0)
+    ) { _ =>
+      def from(user: String) = externalOrigin(SlackPort.Id, user, "C1/1")
+      port.push(GatewayMessage(from("U_alice"), "first"))
+      assert(
+        endpoint.entered
+          .await(FakePort.defaultReplyTimeoutMs, TimeUnit.MILLISECONDS)
+      )
+      port.push(GatewayMessage(from("U_bob"), "mine"))
+      port.push(GatewayMessage(from("U_alice"), "also"))
+      Thread.sleep(300) // both reach the runner's inbox before the turn goes on
+      endpoint.release.countDown()
+
+      assertEquals(port.nextReply().text, "alice done")
+      assertEquals(port.nextReply().text, "bob done")
+      val calls = endpoint.seen.asScala.toList
+        .map(_.filter(_.role == Role.User).map(_.text))
+      assertEquals(calls.length, 3)
+      assert(calls(1).contains("[U_alice] also"), calls(1).toString)
+      assert(!calls(1).contains("[U_bob] mine"), calls(1).toString)
+      assertEquals(calls(2).lastOption, Some("[U_bob] mine"))
     }
 
   test("an approval reply for an unknown request is rejected"):

@@ -100,18 +100,22 @@ class ReplEnvironmentSuite extends munit.FunSuite:
     val outside = Files.createTempDirectory("claw-outside").toRealPath()
     try
       val sessionId = SessionId.random()
-      val broker = ApprovalBroker()
+      val broker = TestIdentities.broker()
+      val origin =
+        Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
       broker.beginTurn(
         sessionId,
         FakePort(SlackPort.Id, supportsApprovals = true),
-        Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
+        origin
       )
       val env =
         ReplEnvironment(dir.toString, Nil, Some(broker.oracle(sessionId)))
       val denied = env.repl.execute(existsCode(outside))
       assert(denied.output.contains("permission request #1"), denied.output)
       assert(
-        broker.resolve(sessionId, Some(1), ApprovalDecision.Approve).isRight
+        broker
+          .resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+          .isRight
       )
       val granted = env.repl.execute(existsCode(outside))
       assert(granted.output.contains("true"), granted.output)
@@ -121,18 +125,24 @@ class ReplEnvironmentSuite extends munit.FunSuite:
     import capybaraclaw.gateway.*
     import capybaraclaw.gateway.port.slack.SlackPort
     val sessionId = SessionId.random()
-    val broker = ApprovalBroker()
+    val broker = TestIdentities.broker()
+    val origin =
+      Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
     broker.beginTurn(
       sessionId,
       FakePort(SlackPort.Id, supportsApprovals = true),
-      Origin(SlackPort.Id, UserId("U_alice"), SessionRef.Direct(sessionId))
+      origin
     )
     val env = ReplEnvironment(dir.toString, Nil, Some(broker.oracle(sessionId)))
     val code =
       """requestExecPermission(Set("echo")) { execOutput("echo", List("ran")) }"""
     val denied = env.repl.execute(code)
     assert(denied.output.contains("permission request #1"), denied.output)
-    assert(broker.resolve(sessionId, Some(1), ApprovalDecision.Approve).isRight)
+    assert(
+      broker
+        .resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+        .isRight
+    )
     val ran = env.repl.execute(code)
     assert(ran.output.contains("ran"), ran.output)
 

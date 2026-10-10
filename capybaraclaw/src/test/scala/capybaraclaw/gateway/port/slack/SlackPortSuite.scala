@@ -4,6 +4,7 @@ import capybaraclaw.gateway.{
   ApprovalDecision,
   ApprovalReply,
   ApprovalRequest,
+  ApprovalResolution,
   Conversation,
   GatewayMessage,
   Permission,
@@ -369,6 +370,7 @@ class SlackPortSuite extends munit.FunSuite:
   private val request = ApprovalRequest(
     7,
     sessionId,
+    "slack:U1",
     Permission.Commands(Set("git")),
     "to show the log"
   )
@@ -397,7 +399,9 @@ class SlackPortSuite extends munit.FunSuite:
       )
     )
 
-  test("the requester's click answers the request and closes the prompt"):
+  test(
+    "the requester's click answers the request; the gateway's verdict closes the prompt"
+  ):
     val bot = FakeSlackApi()
     val port = SlackPort(bot)
     val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
@@ -421,8 +425,53 @@ class SlackPortSuite extends munit.FunSuite:
       )
       assertEquals(
         bot.closed.toList,
+        Nil,
+        "not closed before the gateway decides"
+      )
+      port.approvalResolved(
+        sessionId,
+        ApprovalResolution.Answered(request, ApprovalDecision.Approve),
+        origin
+      )
+      assertEquals(
+        bot.closed.toList,
         List(
           ("prompt-7", ":white_check_mark: Allowed for this session by <@U1>")
+        )
+      )
+      port.shutdown()
+
+  test("a withdrawn request closes its prompt as withdrawn"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+      val _ = port.incoming.read()
+      port.approvalResolved(
+        sessionId,
+        ApprovalResolution
+          .Withdrawn(request, "the roles of x no longer allow it"),
+        origin
+      )
+      assertEquals(
+        bot.closed.toList,
+        List(
+          (
+            "prompt-7",
+            ":no_entry: Withdrawn: the roles of <@U1> no longer allow it"
+          )
         )
       )
       port.shutdown()
