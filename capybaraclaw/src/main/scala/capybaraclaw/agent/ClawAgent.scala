@@ -27,7 +27,12 @@ class ClawAgent(
     AgentConfig.load(workDir, memory.snapshot())
 
   private val replEnv: ReplEnvironment =
-    ReplEnvironment(workDir, agentConfig.classifiedPaths, permissionOracle)
+    ReplEnvironment(
+      workDir,
+      agentConfig.classifiedPaths,
+      permissionOracle,
+      agentConfig.executionTimeoutMs
+    )
 
   private given Endpoint =
     endpointOverride.getOrElse(agentConfig.provider.createEndpoint())

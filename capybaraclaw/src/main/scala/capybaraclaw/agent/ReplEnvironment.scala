@@ -12,13 +12,15 @@ import scala.util.Try
 final class ReplEnvironment(
     workDir: String,
     classifiedPaths: List[String],
-    permissionOracle: Option[String => String] = None
+    permissionOracle: Option[String => String] = None,
+    executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs
 ):
   val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
 
   private val context: TacitContext = TacitContext(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
+      executionTimeoutMs = Some(executionTimeoutMs.toLong),
       libraryConfig = Json.obj(
         "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
         // Relative paths in agent code mean the workdir, wherever the

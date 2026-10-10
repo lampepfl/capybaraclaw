@@ -159,6 +159,31 @@ class ReplEnvironmentSuite extends munit.FunSuite:
       result.output + result.error.getOrElse("")
     )
 
+  workDir.test("a runaway loop times out and does not block other sessions"):
+    dir =>
+      val stuck = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
+      val other = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
+      // Ignores interrupts; bounded so the thread ends after the suite.
+      val loop =
+        """def spin(n: Long): Long =
+          |  var acc = 0L
+          |  var i = 0L
+          |  while i < n do
+          |    acc = acc * 31 + i
+          |    i += 1
+          |  acc
+          |spin(20000000000L)""".stripMargin
+      val timedOut = stuck.repl.execute(loop)
+      assert(!timedOut.success)
+      assert(
+        timedOut.error.exists(_.contains("timed out")),
+        timedOut.error.getOrElse(timedOut.output)
+      )
+      val started = System.nanoTime
+      val result = other.repl.execute("1 + 1")
+      assert(result.output.contains("2"), result.output)
+      assert((System.nanoTime - started) / 1000000 < 5000)
+
   private def existsCode(path: Path): String =
     s"""requestFileSystem("$path") { access("$path").exists }"""
 

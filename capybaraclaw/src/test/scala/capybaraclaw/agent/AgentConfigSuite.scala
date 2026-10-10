@@ -29,6 +29,7 @@ class AgentConfigSuite extends munit.FunSuite:
     assertEquals(c.model, "minimax/minimax-m2.7")
     assertEquals(c.maxTokens, 16000)
     assertEquals(c.classifiedPaths, Nil)
+    assertEquals(c.executionTimeoutMs, AgentConfig.DefaultExecutionTimeoutMs)
     assertEquals(
       c.toLLMConfig("").thinking,
       Some(ThinkingMode.Effort(EffortLevel.Medium))
@@ -37,13 +38,14 @@ class AgentConfigSuite extends munit.FunSuite:
   workDir.test("valid claw.json is parsed"): dir =>
     writeConfig(
       dir,
-      """{"provider":"anthropic","model":"claude","max_tokens":42,"classified_paths":["a/","b"]}"""
+      """{"provider":"anthropic","model":"claude","max_tokens":42,"classified_paths":["a/","b"],"execution_timeout_ms":5000}"""
     )
     val c = AgentConfig.load(dir.toString)
     assertEquals(c.provider, Provider.Anthropic)
     assertEquals(c.model, "claude")
     assertEquals(c.maxTokens, 42)
     assertEquals(c.classifiedPaths, List("a/", "b"))
+    assertEquals(c.executionTimeoutMs, 5000)
     assertEquals(c.toLLMConfig("").thinking, Some(ThinkingMode.Budget(2048)))
 
   workDir.test("ollama runs without thinking"): dir =>
@@ -102,6 +104,13 @@ class AgentConfigSuite extends munit.FunSuite:
     workDir.test(s"max_tokens $n is rejected as not a positive integer"): dir =>
       writeConfig(dir, s"""{"max_tokens":$n}""")
       val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(ex.getMessage.contains("positive integer"), ex.getMessage)
+
+  List("1.5", "0", "-3", "\"soon\"").foreach: n =>
+    workDir.test(s"execution_timeout_ms $n is rejected"): dir =>
+      writeConfig(dir, s"""{"execution_timeout_ms":$n}""")
+      val ex = intercept[ConfigError](AgentConfig.load(dir.toString))
+      assert(ex.getMessage.contains("execution_timeout_ms"), ex.getMessage)
       assert(ex.getMessage.contains("positive integer"), ex.getMessage)
 
   workDir.test("errors name the full path of claw.json"): dir =>
