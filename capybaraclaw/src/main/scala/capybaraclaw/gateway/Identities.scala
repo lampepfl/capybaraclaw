@@ -2,7 +2,9 @@ package capybaraclaw.gateway
 
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
+import java.io.IOException
+import java.nio.file.{Files, NoSuchFileException}
+import java.nio.file.attribute.{BasicFileAttributes, FileTime}
 import java.util.concurrent.atomic.AtomicReference
 
 import org.slf4j.LoggerFactory
@@ -139,6 +141,12 @@ object Identities:
       .flatMap: (name, value) =>
         val where = s"$path: person '$name'"
         if name.isBlank then throw ConfigError(s"$path: a person name is blank")
+        // Ids of people not listed are "<port>:<user>"; a name with ':' could
+        // take one, and with it that person's grants and private memory.
+        if name.contains(':') then
+          throw ConfigError(
+            s"$where: a person name must not contain ':', which only ids of people not listed have"
+          )
         val fields = objectAt(Some(value), where)
         ConfigKeys.rejectUnknown(fields.keys, PersonKeys, where)
         val personRoles = fields
@@ -197,10 +205,18 @@ object Identities:
               case "files" :: _ => list.map(RoleRule.directory(_, where)).toSet
               case "network" :: _ => list.map(RoleRule.host).toSet
               case _              => list.toSet
-        if items.isDefined && pattern.segments.head == "*" then
-          throw ConfigError(
-            s"$where: 'items' needs a kind of permission, e.g. files:read, exec or plugin:<id>/<permission>, not *"
-          )
+        pattern.segments match
+          case "*" :: _ if items.isDefined =>
+            throw ConfigError(
+              s"$where: 'items' needs a kind of permission, e.g. files:read, exec or plugin:<id>/<permission>, not *"
+            )
+          // Each plugin has its own items; the same names across all plugins
+          // are unlikely to be meant.
+          case ("plugin" :: Nil | "plugin" :: "*" :: _) if items.isDefined =>
+            throw ConfigError(
+              s"$where: 'items' of a plugin permission needs the plugin, e.g. plugin:<id>/<permission>, not $pattern"
+            )
+          case _ => ()
         RoleRule(pattern, items)
       case other =>
         throw ConfigError(
@@ -212,43 +228,62 @@ object Identities:
       case -1 => false
       case i  => i > 0 && i < id.length - 1 && !id.exists(_.isWhitespace)
 
-/** `identities.json`, re-read whenever it changes, so that roles and links
-  * apply without a restart. A change that does not load keeps the previous
-  * identities in force and is logged; the file failing at startup is an
-  * error, as with any configuration.
+/** `identities.json`, re-read whenever its modification time or size
+  * changes, so that roles and links apply without a restart. A change that
+  * does not load, or a file that cannot be read, keeps the previous identities
+  * in force and is logged; a deleted file links nobody. The file failing at
+  * startup is an error, as with any configuration.
   */
 final class IdentitiesFile(file: File, operator: Option[String] = None):
   private val logger = LoggerFactory.getLogger(classOf[IdentitiesFile])
 
-  private final case class Loaded(raw: Option[String], identities: Identities)
+  /** `None` stamp and text: the file does not exist. */
+  private final case class Loaded(
+      stamp: Option[(FileTime, Long)],
+      raw: Option[String],
+      identities: Identities
+  )
 
   private val loaded =
-    val raw = read()
-    AtomicReference(Loaded(raw, load(raw)))
+    val stamp = stampNow()
+    val raw = read(stamp)
+    AtomicReference(Loaded(stamp, raw, load(raw)))
 
   def current(): Identities =
-    val raw = read()
     val last = loaded.get()
-    if raw == last.raw then last.identities
-    else
-      val next =
-        try Loaded(raw, load(raw))
-        catch
-          case NonFatal(e) =>
-            logger.warn(
-              s"keeping the previous identities: ${e.getMessage}"
-            )
-            // Not re-parsed, nor warned about, until the file changes again.
-            last.copy(raw = raw)
-      val _ = loaded.compareAndSet(last, next)
-      next.identities
-
-  private def read(): Option[String] =
     try
-      Option.when(file.exists())(
-        Files.readString(file.toPath, StandardCharsets.UTF_8)
-      )
-    catch case NonFatal(_) => None
+      val stamp = stampNow()
+      if stamp == last.stamp then last.identities
+      else
+        val raw = read(stamp)
+        val next =
+          if raw == last.raw then last.copy(stamp = stamp)
+          else
+            try Loaded(stamp, raw, load(raw))
+            catch
+              case e: ConfigError =>
+                logger.warn(s"keeping the previous identities: ${e.getMessage}")
+                // Not parsed again, nor warned about, until the file changes.
+                last.copy(stamp = stamp)
+        val _ = loaded.compareAndSet(last, next)
+        next.identities
+    catch
+      case e: IOException =>
+        // Read again next time: the file may be readable once more.
+        logger.warn(
+          s"keeping the previous identities: cannot read ${file.getPath}: $e"
+        )
+        last.identities
+
+  private def stampNow(): Option[(FileTime, Long)] =
+    try
+      val attributes =
+        Files.readAttributes(file.toPath, classOf[BasicFileAttributes])
+      Some((attributes.lastModifiedTime, attributes.size))
+    catch case _: NoSuchFileException => None
+
+  private def read(stamp: Option[(FileTime, Long)]): Option[String] =
+    stamp.map(_ => Files.readString(file.toPath, StandardCharsets.UTF_8))
 
   private def load(raw: Option[String]): Identities =
     val identities =

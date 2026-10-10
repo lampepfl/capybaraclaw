@@ -535,4 +535,11 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     broker.endTurn(sessionId)
     val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
     assert(!allowed)
-    assert(message.exists(_.contains("outside a turn")), message)
+    assert(
+      message.exists(
+        _.contains(
+          "may only use permissions beyond the session's defaults during a turn"
+        )
+      ),
+      message
+    )

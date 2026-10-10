@@ -55,6 +55,10 @@ final class ApprovalBroker(identities: () => Identities):
   def oracle(sessionId: SessionId): String => String =
     requestJson => decide(sessionId, requestJson)
 
+  /** Whether request `requestId` still waits for an answer. */
+  def isPending(requestId: Int): Boolean =
+    state.get().approvals.pending.contains(requestId)
+
   /** `by` answers the request: only its requester may, and an approval only
     * stands if their roles still allow it.
     */
@@ -172,7 +176,7 @@ object ApprovalBroker:
         (
           s,
           Outcome.Rejected(
-            s"Denied ${permission.describe}: it needs the user's approval and the user cannot be asked outside a turn."
+            s"Denied ${permission.describe}: agent code may only use permissions beyond the session's defaults during a turn, on behalf of the person whose turn it is."
           )
         )
       case Some(turn) =>

@@ -441,6 +441,68 @@ class SlackPortSuite extends munit.FunSuite:
       )
       port.shutdown()
 
+  private def clickAndRefuse(
+      stillPending: Boolean
+  ): (FakeSlackApi, SlackPort, Origin) =
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    val origin = slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1"))
+    Async.blocking:
+      val _ = port.start()
+      port.requestApproval(sessionId, origin, request)
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Approve
+        )
+      )
+      val _ = port.incoming.read()
+      port.approvalRejected(
+        sessionId,
+        Some(7),
+        origin,
+        "not yours",
+        stillPending
+      )
+    (bot, port, origin)
+
+  test("a refused click on a request still pending offers the prompt again"):
+    val (bot, port, origin) = clickAndRefuse(stillPending = true)
+    assertEquals(bot.ephemerals.toList, List(("U1", "not yours")))
+    assertEquals(bot.closed.toList, Nil)
+    Async.blocking:
+      val _ = port.start()
+      bot.click(
+        ApprovalClick(
+          "U1",
+          "C123",
+          "prompt-7",
+          Some("1.1"),
+          7,
+          ApprovalDecision.Deny
+        )
+      )
+      assertEquals(
+        port.incoming.read().toOption,
+        Some(ApprovalReply(origin, Some(7), ApprovalDecision.Deny)),
+        "the prompt answers again"
+      )
+      port.shutdown()
+
+  test("a refused click on a request no longer pending closes the prompt"):
+    val (bot, port, _) = clickAndRefuse(stillPending = false)
+    assertEquals(bot.ephemerals.toList, List(("U1", "not yours")))
+    assertEquals(
+      bot.closed.toList,
+      List(("prompt-7", ":no_entry: No longer pending"))
+    )
+    assertEquals(bot.sent.toList, Nil, "nothing is posted in the thread")
+    port.shutdown()
+
   test("a withdrawn request closes its prompt as withdrawn"):
     val bot = FakeSlackApi()
     val port = SlackPort(bot)

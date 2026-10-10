@@ -19,10 +19,10 @@ final case class PermissionPattern(segments: List[String]):
 
   private def covers(pattern: List[String], name: List[String]): Boolean =
     (pattern, name) match
-      case (Nil, _)              => true
-      case (_, Nil)              => false
-      case ("*" :: pt, _ :: nt)  => covers(pt, nt)
-      case (p :: pt, n :: nt)    => p == n && covers(pt, nt)
+      case (Nil, _)             => true
+      case (_, Nil)             => false
+      case ("*" :: pt, _ :: nt) => covers(pt, nt)
+      case (p :: pt, n :: nt)   => p == n && covers(pt, nt)
 
   override def toString: String = segments match
     case "plugin" :: plugin :: rest =>
@@ -59,7 +59,7 @@ object PermissionPattern:
     if segments.exists(s => s.contains('*') && s != "*") then
       fail("may only use * for a whole part, e.g. plugin:*")
     segments match
-      case List("*") => ()
+      case List("*")                          => ()
       case kind :: _ if !Kinds.contains(kind) =>
         fail(s"must start with ${Kinds.mkString(", ")} or be *")
       case List("files", access) if !Set("read", "write", "*")(access) =>
@@ -93,7 +93,9 @@ final case class RoleRule(
           permission match
             case Permission.Files(root, _) =>
               Option.unless(
-                allowed.exists(dir => Paths.get(root).startsWith(Paths.get(dir)))
+                allowed.exists(dir =>
+                  Paths.get(root).startsWith(Paths.get(dir))
+                )
               )(permission)
             case Permission.Commands(names) =>
               val missing = names -- allowed
@@ -119,7 +121,8 @@ object RoleRule:
       left.flatMap(rule.disallowed)
 
   /** Host names are compared case-insensitively. */
-  private[gateway] def host(name: String): String = name.toLowerCase(Locale.ROOT)
+  private[gateway] def host(name: String): String =
+    name.toLowerCase(Locale.ROOT)
 
   /** Directory items as the canonical paths TACIT asks for: `~/` is the home
     * directory, and symlinks are resolved (e.g. `/tmp` on macOS).

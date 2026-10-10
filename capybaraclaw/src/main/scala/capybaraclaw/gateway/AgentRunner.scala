@@ -31,7 +31,8 @@ private final case class TurnResult(
   * turn's sender are forwarded as live steers on the active `AgentRun` so the LLM
   * can react to them before finishing its response. Messages from anyone else
   * wait for a turn of their own: a turn runs under its sender's permission
-  * grants, which nobody else may steer.
+  * grants, which nobody else may steer. So a sender who keeps steering keeps
+  * everyone else waiting until their turn ends.
   *
   * Messages are tagged `"[userId] text"` on the way into the LLM so a shared-thread
   * agent can still tell who said what.

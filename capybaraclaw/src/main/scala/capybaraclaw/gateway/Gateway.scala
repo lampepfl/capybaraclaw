@@ -180,7 +180,22 @@ class Gateway(
           RoutedGatewayMessage(GatewayMessage(reply.origin, text), port)
         )
       case Left(error) =>
-        rejectInbound(port, reply.origin, error)
+        val stillPending = reply.requestId.exists(approvals.isPending)
+        try
+          port.approvalRejected(
+            sessionId,
+            reply.requestId,
+            reply.origin,
+            error,
+            stillPending
+          )
+        catch
+          case NonFatal(e) =>
+            logger.warn(
+              "failed to notify port '{}' about a refused permission answer",
+              port.id,
+              e
+            )
 
   private def resolveSessionId(origin: Origin): SessionId =
     origin.session match

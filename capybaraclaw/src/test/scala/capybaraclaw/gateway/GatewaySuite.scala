@@ -118,6 +118,9 @@ class FakePort(
   private val inCh = UnboundedChannel[Inbound]()
   val approvalRequests = LinkedBlockingQueue[ApprovalRequest]()
   val resolutions = LinkedBlockingQueue[ApprovalResolution]()
+
+  /** `(requestId, stillPending)` of each answer the gateway refused. */
+  val refusedAnswers = LinkedBlockingQueue[(Option[Int], Boolean)]()
   private val sentReplies = LinkedBlockingQueue[FakePort.Reply]()
   private val finishedTurns = LinkedBlockingQueue[SessionId]()
   private val rejectedInbound = LinkedBlockingQueue[FakePort.Rejection]()
@@ -138,6 +141,16 @@ class FakePort(
       by: Origin
   ): Unit =
     resolutions.put(resolution)
+
+  override def approvalRejected(
+      sessionId: SessionId,
+      requestId: Option[Int],
+      by: Origin,
+      reason: String,
+      stillPending: Boolean
+  ): Unit =
+    refusedAnswers.put(requestId -> stillPending)
+    super.approvalRejected(sessionId, requestId, by, reason, stillPending)
 
   override def conversation(origin: Origin): Conversation =
     conversationOf(origin)
@@ -473,6 +486,7 @@ class GatewaySuite extends munit.FunSuite:
         port.nextRejection().text,
         "Permission request #1 is not yours to answer."
       )
+      assertEquals(port.refusedAnswers.poll(), (Some(1), true))
       assert(port.resolutions.isEmpty)
     }
 
@@ -571,6 +585,7 @@ class GatewaySuite extends munit.FunSuite:
         port.nextRejection().text,
         "No pending permission request #9 in this session."
       )
+      assertEquals(port.refusedAnswers.poll(), (Some(9), false))
     }
 
   test("routes same Slack handle to one runner across multiple users"):

@@ -313,6 +313,34 @@ class SlackPort(bot: SlackApi) extends Port:
             outcome
           )
 
+  /** Tells only the clicker why, and offers the prompt again if its request
+    * can still be answered, or closes it.
+    */
+  override def approvalRejected(
+      sessionId: SessionId,
+      requestId: Option[Int],
+      by: Origin,
+      reason: String,
+      stillPending: Boolean
+  ): Unit =
+    requestId.flatMap(id =>
+      answered.getAndUpdate(_ - id).get(id).map(id -> _)
+    ) match
+      case None                => rejectInbound(by, reason)
+      case Some((id, pending)) =>
+        bestEffort(s"telling <@${by.user}> why #$id was refused"):
+          bot.postEphemeral(pending.channel, pending.threadTs, by.user, reason)
+        if stillPending then
+          val _ = prompts.updateAndGet(_.updated(id, pending))
+        else
+          bestEffort(s"closing prompt #$id"):
+            bot.closeApprovalPrompt(
+              pending.channel,
+              pending.ts,
+              pending.prompt,
+              ":no_entry: No longer pending"
+            )
+
   private def startThinking(handle: SessionHandle, channelId: String): Unit =
     lastMessageTs
       .getAndUpdate(_ - handle.value)

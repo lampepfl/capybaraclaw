@@ -100,7 +100,14 @@ Only the person who asked can answer, and what they approve is granted to
 them in that session only: in a shared Slack thread, someone else's turn
 does not use it. A grant stops counting as soon as its holder's roles no
 longer allow it. While a turn runs, only its sender's messages join it;
-everyone else's wait for a turn of their own.
+everyone else's wait for a turn of their own (as long as the sender keeps
+the turn going).
+
+Grants limit what each person's turns may do, not what everyone in a
+conversation sees: file contents or command output obtained under one
+person's grant stay in the session's context and REPL, so others' later
+turns in the same thread can see them. Per-person grants are not data
+isolation; keep such work to DMs or channels whose members may all see it.
 
 The terminal user who started capybara (`cli:$USER`) is the operator, who
 may be asked for anything whatever the file says. Without the file, nobody

@@ -164,6 +164,30 @@ class IdentitiesSuite extends munit.FunSuite:
       None
     )
 
+  test("a person cannot be named like the id of someone not listed"):
+    // Otherwise the unlisted slack:U999 would share this person's id, and
+    // with it their grants and private memory.
+    rejected(
+      """{"people": {"slack:U999": {"ids": ["slack:U111"]}}}""",
+      "person 'slack:U999': a person name must not contain ':'"
+    )
+
+  test("plugin items need the plugin they belong to"):
+    rejected(
+      """{"roles":{"r":{"may":[{"permission":"plugin","items":["q3"]}]}}}""",
+      "'items' of a plugin permission needs the plugin"
+    )
+    rejected(
+      """{"roles":{"r":{"may":[{"permission":"plugin:*/read","items":["q3"]}]}}}""",
+      "'items' of a plugin permission needs the plugin"
+    )
+    assert(
+      allows(
+        """{"permission": "plugin:demo/*", "items": ["q3"]}""",
+        Plugin("demo", "x", Set("q3"))
+      )
+    )
+
   test("an id listed for two people is rejected"):
     rejected(
       """{"people":{"a":{"ids":["slack:U1"]},"b":{"ids":["slack:U1"]}}}""",
@@ -256,6 +280,36 @@ class IdentitiesSuite extends munit.FunSuite:
     val ids = source.current()
     assertEquals(ids.person(slack, UserId("U1")).roles, Set.empty[String])
     assert(ids.person(PortId("cli"), UserId("op")).operator)
+
+  test("a file that cannot be read keeps the previous identities"):
+    assume(System.getProperty("user.name") != "root", "root reads anything")
+    val file = os.temp(adminJson, suffix = ".json")
+    val source = IdentitiesFile(file.toIO)
+    os.write.over(file, adminJson.replace("[\"admin\"]", "[]"))
+    os.perms.set(file, "---------")
+    try
+      assertEquals(
+        source.current().person(slack, UserId("U1")).roles,
+        Set("admin")
+      )
+    finally os.perms.set(file, "rw-------")
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set.empty[String],
+      "read again once readable"
+    )
+
+  test("a change of the same size is noticed by its modification time"):
+    val file = os.temp(adminJson, suffix = ".json")
+    val source = IdentitiesFile(file.toIO)
+    val before = os.mtime(file)
+    val renamed = adminJson.replace("\"admin\"", "\"xdmin\"")
+    os.write.over(file, renamed)
+    os.mtime.set(file, before + 2000)
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("xdmin")
+    )
 
   test("a file that does not load at startup is an error"):
     val file = os.temp("{ not json", suffix = ".json")
