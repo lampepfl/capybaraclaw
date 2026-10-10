@@ -15,8 +15,9 @@ sealed trait Inbound:
 /** A message for the session's agent. */
 case class GatewayMessage(origin: Origin, text: String) extends Inbound
 
-/** A user's answer to a permission request; `requestId = None` answers the
-  * session's most recent one.
+/** A user's answer to a permission request; `requestId = None` answers their
+  * most recent one in the session. `origin` is whoever answered, which the
+  * gateway checks against the request.
   */
 case class ApprovalReply(
     origin: Origin,
@@ -46,7 +47,7 @@ class Gateway(
         MemoryAccess,
         String => String
     ) => ClawAgent,
-    approvals: ApprovalBroker = ApprovalBroker()
+    approvals: ApprovalBroker = ApprovalBroker(() => Identities.empty)
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
   private val portsById: Map[PortId, Port] = ports.map(p => p.id -> p).toMap
@@ -145,26 +146,56 @@ class Gateway(
           runners.update(sessionId, runner)
           runner
 
-  /** Records the decision and tells the agent, so it retries (or gives up)
-    * without the user having to ask.
+  /** Records the decision, lets the port close its prompt, and tells the
+    * agent, so it retries (or gives up) without the user having to ask.
     */
   private def handleApprovalReply(
       port: Port,
       sessionId: SessionId,
       reply: ApprovalReply
   )(using Async.Spawn): Unit =
-    approvals.resolve(sessionId, reply.requestId, reply.decision) match
-      case Right(request) =>
-        val text = reply.decision match
-          case ApprovalDecision.Approve =>
+    approvals.resolve(
+      sessionId,
+      reply.requestId,
+      reply.decision,
+      reply.origin
+    ) match
+      case Right(resolution) =>
+        try port.approvalResolved(sessionId, resolution, reply.origin)
+        catch
+          case NonFatal(e) =>
+            logger.warn(
+              "port '{}' failed to close an answered permission request",
+              port.id,
+              e
+            )
+        val text = resolution match
+          case ApprovalResolution.Answered(request, ApprovalDecision.Approve) =>
             s"I approved ${request.permission.describe} for this session (permission request #${request.id}). Retry what you were doing."
-          case ApprovalDecision.Deny =>
+          case ApprovalResolution.Answered(request, ApprovalDecision.Deny) =>
             s"I denied ${request.permission.describe} (permission request #${request.id}). Do not retry it; continue without it or ask me what to do."
+          case ApprovalResolution.Withdrawn(request, reason) =>
+            s"Permission request #${request.id} was withdrawn without a grant: $reason. Do not retry it; continue without it."
         getOrCreateRunner(sessionId, port, reply.origin).deliver(
           RoutedGatewayMessage(GatewayMessage(reply.origin, text), port)
         )
       case Left(error) =>
-        rejectInbound(port, reply.origin, error)
+        val stillPending = reply.requestId.exists(approvals.isPending)
+        try
+          port.approvalRejected(
+            sessionId,
+            reply.requestId,
+            reply.origin,
+            error,
+            stillPending
+          )
+        catch
+          case NonFatal(e) =>
+            logger.warn(
+              "failed to notify port '{}' about a refused permission answer",
+              port.id,
+              e
+            )
 
   private def resolveSessionId(origin: Origin): SessionId =
     origin.session match

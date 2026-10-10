@@ -4,6 +4,7 @@ import capybaraclaw.gateway.{
   ApprovalDecision,
   ApprovalReply,
   ApprovalRequest,
+  ApprovalResolution,
   Conversation,
   GatewayMessage,
   Inbound,
@@ -49,6 +50,9 @@ class SlackPort(bot: SlackApi) extends Port:
   private val thinking = AtomicReference(Map.empty[String, Reaction])
 
   private val prompts = AtomicReference(Map.empty[Int, PendingPrompt])
+
+  /** Prompts clicked and sent to the gateway, closed once it has decided. */
+  private val answered = AtomicReference(Map.empty[Int, PendingPrompt])
 
   /** Channel ids seen in a DM. Slack only says so on the message itself, so
     * it is recorded on the way in, before the gateway asks.
@@ -272,24 +276,72 @@ class SlackPort(bot: SlackApi) extends Port:
         val claimed =
           prompts.getAndUpdate(_ - click.requestId).contains(click.requestId)
         if claimed then
-          val outcome = click.decision match
-            case ApprovalDecision.Approve =>
-              s":white_check_mark: Allowed for this session by <@${click.userId}>"
-            case ApprovalDecision.Deny =>
-              s":no_entry: Denied by <@${click.userId}>"
-          bestEffort(s"closing prompt #${click.requestId}"):
-            bot.closeApprovalPrompt(
-              pending.channel,
-              pending.ts,
-              pending.prompt,
-              outcome
-            )
+          val _ = answered.updateAndGet(_.updated(click.requestId, pending))
           val _ = lastMessageTs.updateAndGet(
             _.updated(getSlackHandle(pending.origin).value, pending.ts)
           )
           outCh.sendImmediately(
-            ApprovalReply(pending.origin, Some(click.requestId), click.decision)
+            ApprovalReply(
+              pending.origin.copy(user = UserId(click.userId)),
+              Some(click.requestId),
+              click.decision
+            )
           )
+
+  override def approvalResolved(
+      sessionId: SessionId,
+      resolution: ApprovalResolution,
+      by: Origin
+  ): Unit =
+    val id = resolution.request.id
+    answered
+      .getAndUpdate(_ - id)
+      .get(id)
+      .foreach: pending =>
+        val outcome = resolution match
+          case ApprovalResolution.Answered(_, ApprovalDecision.Approve) =>
+            s":white_check_mark: Allowed for this session by <@${by.user}>"
+          case ApprovalResolution.Answered(_, ApprovalDecision.Deny) =>
+            s":no_entry: Denied by <@${by.user}>"
+          // The reason may name people from identities.json, which this
+          // shared message should not reveal; the agent is told it.
+          case ApprovalResolution.Withdrawn(_, _) =>
+            ":no_entry: Withdrawn: no longer allowed"
+        bestEffort(s"closing prompt #$id"):
+          bot.closeApprovalPrompt(
+            pending.channel,
+            pending.ts,
+            pending.prompt,
+            outcome
+          )
+
+  /** Tells only the clicker why, and offers the prompt again if its request
+    * can still be answered, or closes it.
+    */
+  override def approvalRejected(
+      sessionId: SessionId,
+      requestId: Option[Int],
+      by: Origin,
+      reason: String,
+      stillPending: Boolean
+  ): Unit =
+    requestId.flatMap(id =>
+      answered.getAndUpdate(_ - id).get(id).map(id -> _)
+    ) match
+      case None                => rejectInbound(by, reason)
+      case Some((id, pending)) =>
+        bestEffort(s"telling <@${by.user}> why #$id was refused"):
+          bot.postEphemeral(pending.channel, pending.threadTs, by.user, reason)
+        if stillPending then
+          val _ = prompts.updateAndGet(_.updated(id, pending))
+        else
+          bestEffort(s"closing prompt #$id"):
+            bot.closeApprovalPrompt(
+              pending.channel,
+              pending.ts,
+              pending.prompt,
+              ":no_entry: No longer pending"
+            )
 
   private def startThinking(handle: SessionHandle, channelId: String): Unit =
     lastMessageTs

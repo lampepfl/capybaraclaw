@@ -10,9 +10,9 @@ class MemoryDirectorySuite extends munit.FunSuite:
 
   private def linked(root: os.Path): MemoryDirectory =
     val ids = os.temp(
-      """{"people":{"lukasz":{"ids":["cli:lbialy","slack:U1"],"role":"admin"}}}"""
+      """{"people":{"lukasz":{"ids":["cli:lbialy","slack:U1"]}}}"""
     )
-    MemoryDirectory(root.toIO, Identities.load(ids.toIO))
+    MemoryDirectory(root.toIO, () => Identities.load(ids.toIO))
 
   private def tool(access: MemoryAccess, args: Args): ujson.Value =
     ujson.read(MemoryTool.run(access, args))
@@ -37,7 +37,7 @@ class MemoryDirectorySuite extends munit.FunSuite:
 
   test("a hostile CLI user name stays inside persons/"):
     val root = os.temp.dir()
-    val access = MemoryDirectory(root.toIO, Identities.empty)
+    val access = MemoryDirectory(root.toIO, () => Identities.empty)
       .access(cli, UserId("../../escape"), Conversation.Direct)
     add(access, "private", "note")
     assertEquals(

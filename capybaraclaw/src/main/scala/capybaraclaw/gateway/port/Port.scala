@@ -2,6 +2,7 @@ package capybaraclaw.gateway.port
 
 import capybaraclaw.gateway.{
   ApprovalRequest,
+  ApprovalResolution,
   Conversation,
   Inbound,
   Origin,
@@ -61,6 +62,29 @@ trait Port extends AutoCloseable:
       origin: Origin,
       request: ApprovalRequest
   ): Unit = ()
+
+  /** The gateway acted on an `ApprovalReply` from this port, sent by `by`:
+    * the port can now close the request's prompt with the outcome.
+    */
+  def approvalResolved(
+      sessionId: SessionId,
+      resolution: ApprovalResolution,
+      by: Origin
+  ): Unit = ()
+
+  /** The gateway refused an `ApprovalReply` from this port, sent by `by`:
+    * e.g. the request is not theirs, or no longer pending. `stillPending`
+    * tells whether request `requestId` can still be answered, so a port can
+    * offer it again or close it. Reports `reason` with [[rejectInbound]]
+    * unless overridden.
+    */
+  def approvalRejected(
+      sessionId: SessionId,
+      requestId: Option[Int],
+      by: Origin,
+      reason: String,
+      stillPending: Boolean
+  ): Unit = rejectInbound(by, reason)
 
   /** Called after a turn for `sessionId` finishes, regardless of whether it
     * produced a reply. Ports that want to block input until a turn is done can

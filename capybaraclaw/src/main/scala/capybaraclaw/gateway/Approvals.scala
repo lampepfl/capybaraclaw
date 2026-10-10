@@ -67,14 +67,18 @@ object Permission:
   def quoteAll(texts: Set[String]): String =
     texts.toList.sorted.map(quote).mkString(", ")
 
-/** `reason` is the requester's own explanation (the agent's, or for
-  * [[Permission.Plugin]] the plugin's), shown to the user as such.
+/** `requester` is the [[Person.id]] whose turn asked; only they may answer.
+  * `account` is the `"<port>:<user>"` they asked from. `reason` is the
+  * requester's own explanation (the agent's, or for [[Permission.Plugin]] the
+  * plugin's), shown to the user as such.
   */
 final case class ApprovalRequest(
     id: Int,
     sessionId: SessionId,
+    requester: String,
     permission: Permission,
-    reason: String = ""
+    reason: String = "",
+    account: String = ""
 ):
   def reasonLine: Option[String] =
     val who = permission match
@@ -85,20 +89,25 @@ final case class ApprovalRequest(
 enum ApprovalDecision:
   case Approve, Deny
 
+/** Whose grants: a person's, in one session. What Alice is granted in a shared
+  * thread does not cover Bob's turns in it.
+  */
+final case class Grantee(sessionId: SessionId, person: String)
+
 /** Pending requests and granted permissions of all sessions. Grants last until
   * the gateway stops.
   */
 final case class Approvals(
     nextId: Int,
     pending: Map[Int, ApprovalRequest],
-    grants: Map[SessionId, Set[Permission]]
+    grants: Map[Grantee, Set[Permission]]
 ):
-  /** The part of `permission` the session has not been granted yet, if any. */
+  /** The part of `permission` the grantee has not been granted yet, if any. */
   def ungranted(
-      sessionId: SessionId,
+      grantee: Grantee,
       permission: Permission
   ): Option[Permission] =
-    val granted = grants.getOrElse(sessionId, Set.empty)
+    val granted = grants.getOrElse(grantee, Set.empty)
     permission match
       case Permission.Files(root, access) =>
         val covered = granted.exists:
@@ -139,21 +148,31 @@ final case class Approvals(
           )
         )
 
-  /** Reuses the session's pending request for the same permission, so an agent
-    * that retries before the user answers does not pile up requests. The flag
-    * tells whether the request is new, i.e. the user has not been shown it yet.
+  /** Reuses the grantee's pending request for the same permission, so an
+    * agent that retries before the user answers does not pile up requests.
+    * The flag tells whether the request is new, i.e. the user has not been
+    * shown it yet.
     */
   def request(
-      sessionId: SessionId,
+      grantee: Grantee,
       permission: Permission,
-      reason: String = ""
+      reason: String = "",
+      account: String = ""
   ): (Approvals, ApprovalRequest, Boolean) =
     pending.values.find(r =>
-      r.sessionId == sessionId && r.permission == permission
+      r.sessionId == grantee.sessionId && r.requester == grantee.person &&
+        r.permission == permission
     ) match
       case Some(existing) => (this, existing, false)
       case None           =>
-        val request = ApprovalRequest(nextId, sessionId, permission, reason)
+        val request = ApprovalRequest(
+          nextId,
+          grantee.sessionId,
+          grantee.person,
+          permission,
+          reason,
+          account
+        )
         (
           copy(
             nextId = nextId + 1,
@@ -169,34 +188,45 @@ final case class Approvals(
   def withdraw(requestId: Int): Approvals =
     copy(pending = pending - requestId)
 
-  /** `requestId = None` answers the session's most recent pending request. A
-    * session can only answer its own requests.
+  /** The pending request `grantee` may answer: `requestId = None` is their
+    * most recent one in the session. Only the requester answers a request,
+    * and only in its own session.
     */
-  def resolve(
-      sessionId: SessionId,
-      requestId: Option[Int],
-      decision: ApprovalDecision
-  ): Either[String, (Approvals, ApprovalRequest)] =
-    val target = requestId match
+  def answerable(
+      grantee: Grantee,
+      requestId: Option[Int]
+  ): Either[String, ApprovalRequest] =
+    requestId match
       case Some(id) =>
         pending
           .get(id)
-          .filter(_.sessionId == sessionId)
+          .filter(_.sessionId == grantee.sessionId)
           .toRight(s"No pending permission request #$id in this session.")
+          .filterOrElse(
+            _.requester == grantee.person,
+            s"Permission request #$id is not yours to answer."
+          )
       case None =>
         pending.values
-          .filter(_.sessionId == sessionId)
-          .maxByOption(_.id)
-          .toRight("No pending permission requests in this session.")
-    target.map: request =>
-      val updatedGrants = decision match
-        case ApprovalDecision.Approve =>
-          grants.updated(
-            sessionId,
-            grants.getOrElse(sessionId, Set.empty) + request.permission
+          .filter(r =>
+            r.sessionId == grantee.sessionId && r.requester == grantee.person
           )
-        case ApprovalDecision.Deny => grants
-      (copy(pending = pending - request.id, grants = updatedGrants), request)
+          .maxByOption(_.id)
+          .toRight("You have no pending permission requests in this session.")
+
+  /** Closes a pending request; approving grants it to its requester in its
+    * session.
+    */
+  def resolve(request: ApprovalRequest, decision: ApprovalDecision): Approvals =
+    val grantee = Grantee(request.sessionId, request.requester)
+    val updatedGrants = decision match
+      case ApprovalDecision.Approve =>
+        grants.updated(
+          grantee,
+          grants.getOrElse(grantee, Set.empty) + request.permission
+        )
+      case ApprovalDecision.Deny => grants
+    copy(pending = pending - request.id, grants = updatedGrants)
 
 object Approvals:
   val empty: Approvals =

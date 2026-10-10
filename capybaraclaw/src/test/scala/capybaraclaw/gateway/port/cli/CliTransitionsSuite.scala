@@ -73,6 +73,7 @@ class CliTransitionsSuite extends FunSuite:
     ApprovalRequest(
       3,
       SessionId.random(),
+      "cli:lbialy",
       Permission.Files("/data", Permission.FileAccess.ReadWrite)
     )
 

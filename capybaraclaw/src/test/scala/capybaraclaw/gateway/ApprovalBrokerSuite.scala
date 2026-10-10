@@ -21,7 +21,7 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     )
 
   private def askingBroker(): (ApprovalBroker, FakePort) =
-    val broker = ApprovalBroker()
+    val broker = TestIdentities.broker()
     val port = FakePort(SlackPort.Id, supportsApprovals = true)
     broker.beginTurn(sessionId, port, origin)
     (broker, port)
@@ -41,13 +41,15 @@ class ApprovalBrokerSuite extends munit.FunSuite:
         ApprovalRequest(
           1,
           sessionId,
-          Permission.Files("/data", Permission.FileAccess.ReadWrite)
+          "slack:U_alice",
+          Permission.Files("/data", Permission.FileAccess.ReadWrite),
+          account = "slack:U_alice"
         )
       )
     )
 
   test("denies without asking on a port that cannot ask"):
-    val broker = ApprovalBroker()
+    val broker = TestIdentities.broker()
     val port = FakePort(SlackPort.Id)
     broker.beginTurn(sessionId, port, origin)
     val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
@@ -55,23 +57,22 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     assert(message.exists(_.contains("cannot ask the user")), message)
     assert(port.approvalRequests.isEmpty)
     assertEquals(
-      broker.resolve(sessionId, None, ApprovalDecision.Approve),
-      Left("No pending permission requests in this session.")
+      broker.resolve(sessionId, None, ApprovalDecision.Approve, origin),
+      Left("You have no pending permission requests in this session.")
     )
 
   test("denies outside a turn, when there is nobody to ask"):
-    val broker = ApprovalBroker()
+    val broker = TestIdentities.broker()
     val (allowed, _) = answer(broker.oracle(sessionId)(request("/data")))
     assert(!allowed)
 
   test("allows a root below an approved one"):
     val (broker, _) = askingBroker()
     val _ = broker.oracle(sessionId)(request("/data"))
-    broker.endTurn(sessionId)
     assertEquals(
       broker
-        .resolve(sessionId, Some(1), ApprovalDecision.Approve)
-        .map(_.permission),
+        .resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+        .map(_.request.permission),
       Right(Permission.Files("/data", Permission.FileAccess.ReadWrite))
     )
     assertEquals(
@@ -118,10 +119,11 @@ class ApprovalBrokerSuite extends munit.FunSuite:
       assert(port.approvalRequests.isEmpty)
 
   test("a grant in one session does not let another session through"):
-    val (broker, _) = askingBroker()
+    val (broker, port) = askingBroker()
     val other = SessionId.random()
+    broker.beginTurn(other, port, origin)
     val _ = broker.oracle(sessionId)(request("/data"))
-    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve)
+    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
     assertEquals(answer(broker.oracle(sessionId)(request("/data")))._1, true)
     assertEquals(answer(broker.oracle(other)(request("/data")))._1, false)
 
@@ -143,7 +145,7 @@ class ApprovalBrokerSuite extends munit.FunSuite:
   test("asks only for the commands that are not granted yet"):
     val (broker, port) = askingBroker()
     val _ = broker.oracle(sessionId)(itemsRequest("exec", "git"))
-    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve)
+    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
     val (allowed, message) =
       answer(broker.oracle(sessionId)(itemsRequest("exec", "git", "sbt")))
     assert(!allowed)
@@ -320,7 +322,7 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     )
 
   test("a request the port fails to show is dropped and asked again"):
-    val broker = ApprovalBroker()
+    val broker = TestIdentities.broker()
     val failures = java.util.concurrent.atomic.AtomicInteger(1)
     val port = new FakePort(SlackPort.Id, supportsApprovals = true):
       override def requestApproval(
@@ -336,8 +338,8 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     assert(!allowed)
     assert(message.exists(_.contains("could not reach the user")), message)
     assertEquals(
-      broker.resolve(sessionId, None, ApprovalDecision.Approve),
-      Left("No pending permission requests in this session.")
+      broker.resolve(sessionId, None, ApprovalDecision.Approve, origin),
+      Left("You have no pending permission requests in this session.")
     )
     val (retried, _) = answer(broker.oracle(sessionId)(request("/data")))
     assert(!retried)
@@ -351,3 +353,224 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     val many = (1 to 300).map(i => s"host-$i.example.com")
     assert(!answer(broker.oracle(sessionId)(itemsRequest("network", many*)))._1)
     assert(port.approvalRequests.isEmpty)
+
+  // --- roles ---
+
+  private val bobOrigin =
+    Origin(SlackPort.Id, UserId("U_bob"), SessionRef.Direct(sessionId))
+
+  private def identities(json: String): Identities =
+    Identities.parse(json, "identities.json")
+
+  /** alice may approve files and git; bob only fetching; others nothing. */
+  private val teamJson =
+    """{
+      "roles": {
+        "ops": {"may": ["files", {"permission": "exec", "items": ["git"]}]},
+        "dev": {"may": ["network:fetch"]}
+      },
+      "people": {
+        "alice": {"ids": ["slack:U_alice"], "roles": ["ops"]},
+        "bob": {"ids": ["slack:U_bob"], "roles": ["dev"]}
+      }
+    }"""
+
+  private def teamBroker(
+      json: String = teamJson
+  ): (
+      ApprovalBroker,
+      FakePort,
+      java.util.concurrent.atomic.AtomicReference[Identities]
+  ) =
+    val ids = java.util.concurrent.atomic.AtomicReference(identities(json))
+    val broker = ApprovalBroker(() => ids.get())
+    val port = FakePort(SlackPort.Id, supportsApprovals = true)
+    broker.beginTurn(sessionId, port, origin)
+    (broker, port, ids)
+
+  test(
+    "a permission the requester's roles do not allow is denied without asking"
+  ):
+    val (broker, port, _) = teamBroker()
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(itemsRequest("network", "a.com")))
+    assert(!allowed)
+    assert(
+      message.exists(
+        _.contains(
+          "Denied sending data to \"a.com\": the roles of alice do not allow it"
+        )
+      ),
+      message
+    )
+    assert(port.approvalRequests.isEmpty)
+
+  test("the denial names the part of a request the roles do not allow"):
+    val (broker, port, _) = teamBroker()
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(itemsRequest("exec", "git", "rm")))
+    assert(!allowed)
+    assert(
+      message.exists(_.contains("Denied running \"rm\" with any arguments")),
+      message
+    )
+    assert(port.approvalRequests.isEmpty)
+
+  test("someone not listed gets the default roles"):
+    val (broker, port, _) = teamBroker(
+      """{"roles": {"guest": {"may": ["network:fetch"]}}, "default_roles": ["guest"]}"""
+    )
+    val fetch = ujson.write(
+      ujson.Obj(
+        "kind" -> "network",
+        "items" -> ujson.Arr("a.com"),
+        "access" -> "fetch"
+      )
+    )
+    assert(!answer(broker.oracle(sessionId)(fetch))._1)
+    assertEquals(port.approvalRequests.size, 1)
+    assert(!answer(broker.oracle(sessionId)(request("/data")))._1)
+    assertEquals(port.approvalRequests.size, 1, "files are not asked for")
+
+  test("with no roles at all, nobody but the operator is asked"):
+    val broker = ApprovalBroker(() => Identities.empty.withOperator("cli:op"))
+    val port = FakePort(PortId("cli"), supportsApprovals = true)
+    broker.beginTurn(sessionId, port, origin)
+    assert(!answer(broker.oracle(sessionId)(request("/data")))._1)
+    assert(port.approvalRequests.isEmpty)
+    val operator =
+      Origin(PortId("cli"), UserId("op"), SessionRef.Direct(sessionId))
+    broker.beginTurn(sessionId, port, operator)
+    assert(!answer(broker.oracle(sessionId)(request("/data")))._1)
+    assertEquals(port.approvalRequests.size, 1)
+    assert(
+      broker
+        .resolve(sessionId, Some(1), ApprovalDecision.Approve, operator)
+        .isRight
+    )
+    assertEquals(answer(broker.oracle(sessionId)(request("/data")))._1, true)
+
+  test("a grant covers its requester only, not others in the same session"):
+    val (broker, port, _) = teamBroker(
+      """{"roles": {"all": {"may": ["*"]}}, "default_roles": ["all"]}"""
+    )
+    val _ = broker.oracle(sessionId)(request("/data"))
+    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+    assertEquals(answer(broker.oracle(sessionId)(request("/data")))._1, true)
+    broker.beginTurn(sessionId, port, bobOrigin)
+    val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!allowed)
+    assert(message.exists(_.contains("permission request #2")), message)
+    assertEquals(port.approvalRequests.poll().nn.requester, "slack:U_alice")
+    assertEquals(port.approvalRequests.poll().nn.requester, "slack:U_bob")
+
+  test("only the requester can answer a request"):
+    val (broker, _, _) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    assertEquals(
+      broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, bobOrigin),
+      Left("Permission request #1 is not yours to answer.")
+    )
+    assertEquals(
+      broker.resolve(sessionId, None, ApprovalDecision.Approve, bobOrigin),
+      Left("You have no pending permission requests in this session.")
+    )
+    assert(
+      broker
+        .resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+        .isRight
+    )
+
+  test("a grant stops counting as soon as its holder loses the role"):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+    assertEquals(answer(broker.oracle(sessionId)(request("/data/q3")))._1, true)
+    ids.set(
+      identities(
+        teamJson.replace("\"roles\": [\"ops\"]", "\"roles\": [\"dev\"]")
+      )
+    )
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(request("/data/q3")))
+    assert(!allowed)
+    assert(
+      message.exists(_.contains("the roles of alice do not allow it")),
+      message
+    )
+
+  test("approving after losing the role withdraws the request without a grant"):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(
+      identities(
+        teamJson.replace("\"roles\": [\"ops\"]", "\"roles\": [\"dev\"]")
+      )
+    )
+    val resolution =
+      broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+    resolution match
+      case Right(ApprovalResolution.Withdrawn(request, reason)) =>
+        assertEquals(request.id, 1)
+        assert(reason.contains("the roles of alice no longer allow"), reason)
+      case other => fail(s"expected a withdrawal, got $other")
+    ids.set(identities(teamJson))
+    val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!allowed, "the withdrawn request granted nothing")
+    assert(message.exists(_.contains("permission request #2")), message)
+
+  test(
+    "an answer from the asking account, now linked to someone else, withdraws the request"
+  ):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(identities(teamJson.replace("\"alice\": {", "\"alicia\": {")))
+    broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin) match
+      case Right(ApprovalResolution.Withdrawn(request, reason)) =>
+        assertEquals(request.id, 1)
+        assertEquals(
+          reason,
+          "slack:U_alice asked as alice but is now linked to alicia"
+        )
+      case other => fail(s"expected a withdrawal, got $other")
+    assertEquals(
+      broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin),
+      Left("No pending permission request #1 in this session.")
+    )
+
+  test(
+    "an answer without an id from the relinked account withdraws its latest request"
+  ):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(identities(teamJson.replace("\"alice\": {", "\"alicia\": {")))
+    broker.resolve(sessionId, None, ApprovalDecision.Approve, origin) match
+      case Right(ApprovalResolution.Withdrawn(request, _)) =>
+        assertEquals(request.id, 1)
+      case other => fail(s"expected a withdrawal, got $other")
+
+  test("denying is always possible, even after losing every role"):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(
+      identities(teamJson.replace("\"roles\": [\"ops\"]", "\"roles\": []"))
+    )
+    broker.resolve(sessionId, Some(1), ApprovalDecision.Deny, origin) match
+      case Right(ApprovalResolution.Answered(_, ApprovalDecision.Deny)) => ()
+      case other => fail(s"expected a denial, got $other")
+
+  test("outside a turn nothing beyond the defaults is allowed, granted or not"):
+    val (broker, _) = askingBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    val _ = broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin)
+    broker.endTurn(sessionId)
+    val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
+    assert(!allowed)
+    assert(
+      message.exists(
+        _.contains(
+          "may only use permissions beyond the session's defaults during a turn"
+        )
+      ),
+      message
+    )

@@ -52,3 +52,63 @@ Slack's documentation describes; what capybara relies on:
   [`users.info`](https://docs.slack.dev/reference/methods/users.info).
   A missing scope shows up as a `missing_scope` error in
   `~/.claw/logs/capybara.log`.
+
+## People and roles
+
+Who may be asked for which permissions is set in `~/.claw/identities.json`,
+written by the operator. Capybara re-reads it whenever it changes, so roles
+apply without a restart; a change that does not load is logged and the
+previous version stays in force.
+
+```json
+{
+  "roles": {
+    "admin": { "may": ["*"] },
+    "dev": {
+      "may": [
+        "network:fetch",
+        { "permission": "exec", "items": ["git", "sbt"] },
+        { "permission": "files:read", "items": ["~/src"] }
+      ]
+    },
+    "finance": { "may": ["plugin:sheets/read payroll"] }
+  },
+  "default_roles": [],
+  "people": {
+    "lukasz": { "ids": ["cli:lbialy", "slack:U0123"], "roles": ["admin"] },
+    "ann": { "ids": ["slack:U0456"], "roles": ["dev", "finance"] }
+  }
+}
+```
+
+- `ids` link a person's accounts across ports (`<port>:<user>`, e.g. a Slack
+  member id). Someone not listed, and a person without `roles`, gets
+  `default_roles`.
+- A role's `may` lists the permissions its holders may be asked for:
+  `files`, `files:read`, `files:write`, `exec`, `network`, `network:fetch`,
+  `network:send`, `plugin`, `plugin:<id>`, `plugin:<id>/<permission>`, or `*`
+  for everything. A pattern covers everything below it, and `*` may stand for
+  one whole part (`plugin:*`, `plugin:<id>/*`). `files:write` covers reading,
+  `network:send` fetching.
+- `items` limits a rule to those command names (`exec`), host names
+  (`network`), plugin items (`plugin:…`), or directories and everything below
+  them (`files`, absolute or starting with `~/`).
+
+When agent code needs a permission during someone's turn, they are asked for
+it only if their roles allow it; otherwise it is denied without asking.
+Only the person who asked can answer, and what they approve is granted to
+them in that session only: in a shared Slack thread, someone else's turn
+does not use it. A grant stops counting as soon as its holder's roles no
+longer allow it. While a turn runs, only its sender's messages join it;
+everyone else's wait for a turn of their own (as long as the sender keeps
+the turn going).
+
+Grants limit what each person's turns may do, not what everyone in a
+conversation sees: file contents or command output obtained under one
+person's grant stay in the session's context and REPL, so others' later
+turns in the same thread can see them. Per-person grants are not data
+isolation; keep such work to DMs or channels whose members may all see it.
+
+The terminal user who started capybara (`cli:$USER`) is the operator, who
+may be asked for anything whatever the file says. Without the file, nobody
+else may be asked for anything.
