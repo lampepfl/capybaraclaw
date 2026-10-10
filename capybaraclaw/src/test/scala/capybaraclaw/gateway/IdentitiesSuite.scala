@@ -311,6 +311,53 @@ class IdentitiesSuite extends munit.FunSuite:
       Set("xdmin")
     )
 
+  test("a same-size edit within the same timestamp is noticed by content"):
+    val file = os.temp(adminJson, suffix = ".json")
+    val source = IdentitiesFile(file.toIO)
+    val before = os.mtime(file)
+    os.write.over(file, adminJson.replace("\"admin\"", "\"xdmin\""))
+    os.mtime.set(file, before) // as a coarse file system would record it
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("xdmin")
+    )
+
+  test("a change that is not valid UTF-8 keeps the previous identities"):
+    val file = os.temp(adminJson, suffix = ".json")
+    val source = IdentitiesFile(file.toIO)
+    os.write.over(file, Array[Byte](0x7b, 0xff.toByte, 0x7d))
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("admin")
+    )
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("admin")
+    )
+    os.write.over(file, "{}")
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set.empty[String]
+    )
+
+  test("a directory that is not a valid path is a config error"):
+    val json =
+      """{"roles":{"r":{"may":[{"permission":"files","items":["/a\u0000b"]}]}}}"""
+    rejected(json, "is not a valid path")
+    val file = os.temp(adminJson, suffix = ".json")
+    val source = IdentitiesFile(file.toIO)
+    os.write.over(file, json)
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("admin"),
+      "a reload keeps the previous identities"
+    )
+
+  test("invalid UTF-8 at startup is a config error"):
+    val file = os.temp(Array[Byte](0x7b, 0xff.toByte, 0x7d), suffix = ".json")
+    val ex = intercept[ConfigError](IdentitiesFile(file.toIO))
+    assert(ex.getMessage.contains("is not valid UTF-8"), ex.getMessage)
+
   test("a file that does not load at startup is an error"):
     val file = os.temp("{ not json", suffix = ".json")
     intercept[ConfigError](IdentitiesFile(file.toIO))

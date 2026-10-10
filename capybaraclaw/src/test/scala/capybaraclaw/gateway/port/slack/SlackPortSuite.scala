@@ -532,7 +532,7 @@ class SlackPortSuite extends munit.FunSuite:
         List(
           (
             "prompt-7",
-            ":no_entry: Withdrawn: the roles of <@U1> no longer allow it"
+            ":no_entry: Withdrawn: the roles of x no longer allow it"
           )
         )
       )

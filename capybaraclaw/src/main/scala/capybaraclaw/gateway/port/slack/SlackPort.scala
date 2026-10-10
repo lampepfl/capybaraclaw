@@ -303,8 +303,8 @@ class SlackPort(bot: SlackApi) extends Port:
             s":white_check_mark: Allowed for this session by <@${by.user}>"
           case ApprovalResolution.Answered(_, ApprovalDecision.Deny) =>
             s":no_entry: Denied by <@${by.user}>"
-          case ApprovalResolution.Withdrawn(_, _) =>
-            s":no_entry: Withdrawn: the roles of <@${by.user}> no longer allow it"
+          case ApprovalResolution.Withdrawn(_, reason) =>
+            s":no_entry: Withdrawn: $reason"
         bestEffort(s"closing prompt #$id"):
           bot.closeApprovalPrompt(
             pending.channel,

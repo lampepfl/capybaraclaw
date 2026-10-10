@@ -68,7 +68,7 @@ object Permission:
     texts.toList.sorted.map(quote).mkString(", ")
 
 /** `requester` is the [[Person.id]] whose turn asked; only they may answer.
-  * `reason` is the requester's own explanation (the agent's, or for
+  * `account` is the `"<port>:<user>"` they asked from. `reason` is the requester's own explanation (the agent's, or for
   * [[Permission.Plugin]] the plugin's), shown to the user as such.
   */
 final case class ApprovalRequest(
@@ -76,7 +76,8 @@ final case class ApprovalRequest(
     sessionId: SessionId,
     requester: String,
     permission: Permission,
-    reason: String = ""
+    reason: String = "",
+    account: String = ""
 ):
   def reasonLine: Option[String] =
     val who = permission match
@@ -154,7 +155,8 @@ final case class Approvals(
   def request(
       grantee: Grantee,
       permission: Permission,
-      reason: String = ""
+      reason: String = "",
+      account: String = ""
   ): (Approvals, ApprovalRequest, Boolean) =
     pending.values.find(r =>
       r.sessionId == grantee.sessionId && r.requester == grantee.person &&
@@ -167,7 +169,8 @@ final case class Approvals(
           grantee.sessionId,
           grantee.person,
           permission,
-          reason
+          reason,
+          account
         )
         (
           copy(

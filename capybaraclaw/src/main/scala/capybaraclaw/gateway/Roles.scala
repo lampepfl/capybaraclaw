@@ -1,7 +1,7 @@
 package capybaraclaw.gateway
 
-import java.io.File
-import java.nio.file.Paths
+import java.io.{File, IOException}
+import java.nio.file.{InvalidPathException, Paths}
 import java.util.Locale
 
 import capybaraclaw.agent.ConfigError
@@ -133,8 +133,11 @@ object RoleRule:
       else if path.startsWith("~/") then
         System.getProperty("user.home") + path.drop(1)
       else path
-    if !Paths.get(expanded).isAbsolute then
-      throw ConfigError(
-        s"$where: directory ${Permission.quote(path)} must be absolute or start with ~/"
-      )
-    File(expanded).getCanonicalPath
+    def invalid(why: String): Nothing =
+      throw ConfigError(s"$where: directory ${Permission.quote(path)} $why")
+    val absolute =
+      try Paths.get(expanded).isAbsolute
+      catch case _: InvalidPathException => invalid("is not a valid path")
+    if !absolute then invalid("must be absolute or start with ~/")
+    try File(expanded).getCanonicalPath
+    catch case e: IOException => invalid(s"cannot be resolved: ${e.getMessage}")

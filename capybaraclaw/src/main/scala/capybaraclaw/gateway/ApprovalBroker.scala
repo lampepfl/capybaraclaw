@@ -15,8 +15,9 @@ import scala.util.control.NonFatal
 enum ApprovalResolution:
   case Answered(request: ApprovalRequest, decision: ApprovalDecision)
 
-  /** Approved, but the requester's roles no longer allow it: closed without
-    * a grant.
+  /** Closed without a grant: approved, but the requester's roles no longer
+    * allow it, or answered from the account that asked, which is now linked
+    * to someone else.
     */
   case Withdrawn(request: ApprovalRequest, reason: String)
 
@@ -60,7 +61,9 @@ final class ApprovalBroker(identities: () => Identities):
     state.get().approvals.pending.contains(requestId)
 
   /** `by` answers the request: only its requester may, and an approval only
-    * stands if their roles still allow it.
+    * stands if their roles still allow it. An answer from the account that
+    * asked, now linked to someone else, withdraws the request: nobody could
+    * answer it otherwise.
     */
   def resolve(
       sessionId: SessionId,
@@ -70,26 +73,53 @@ final class ApprovalBroker(identities: () => Identities):
   ): Either[String, ApprovalResolution] =
     val ids = identities()
     val person = ids.person(by.port, by.user)
+    val account = s"${by.port}:${by.user}"
     update: s =>
-      s.approvals.answerable(Grantee(sessionId, person.id), requestId) match
-        case Left(error)    => (s, Left(error))
-        case Right(request) =>
-          ids.disallowed(person, request.permission) match
-            case Some(part) if decision == ApprovalDecision.Approve =>
-              (
-                s.copy(approvals = s.approvals.withdraw(request.id)),
-                Right(
-                  ApprovalResolution.Withdrawn(
-                    request,
-                    s"the roles of ${person.id} no longer allow ${part.describe}"
-                  )
+      val relinked = requestId
+        .flatMap(s.approvals.pending.get)
+        .filter: r =>
+          r.sessionId == sessionId && r.account == account &&
+            r.requester != person.id
+      relinked match
+        case Some(request) =>
+          (
+            s.copy(approvals = s.approvals.withdraw(request.id)),
+            Right(
+              ApprovalResolution.Withdrawn(
+                request,
+                s"$account asked as ${request.requester} but is now linked to ${person.id}"
+              )
+            )
+          )
+        case None => answer(s, ids, person, sessionId, requestId, decision)
+
+  private def answer(
+      s: BrokerState,
+      ids: Identities,
+      person: Person,
+      sessionId: SessionId,
+      requestId: Option[Int],
+      decision: ApprovalDecision
+  ): (BrokerState, Either[String, ApprovalResolution]) =
+    s.approvals.answerable(Grantee(sessionId, person.id), requestId) match
+      case Left(error)    => (s, Left(error))
+      case Right(request) =>
+        ids.disallowed(person, request.permission) match
+          case Some(part) if decision == ApprovalDecision.Approve =>
+            (
+              s.copy(approvals = s.approvals.withdraw(request.id)),
+              Right(
+                ApprovalResolution.Withdrawn(
+                  request,
+                  s"the roles of ${person.id} no longer allow ${part.describe}"
                 )
               )
-            case _ =>
-              (
-                s.copy(approvals = s.approvals.resolve(request, decision)),
-                Right(ApprovalResolution.Answered(request, decision))
-              )
+            )
+          case _ =>
+            (
+              s.copy(approvals = s.approvals.resolve(request, decision)),
+              Right(ApprovalResolution.Answered(request, decision))
+            )
 
   private def decide(sessionId: SessionId, requestJson: String): String =
     val outcome = parseRequest(requestJson) match
@@ -203,7 +233,12 @@ object ApprovalBroker:
                 )
               case Some(missing) =>
                 val (approvals, request, isNew) =
-                  s.approvals.request(grantee, missing, reason)
+                  s.approvals.request(
+                    grantee,
+                    missing,
+                    reason,
+                    s"${turn.origin.port}:${turn.origin.user}"
+                  )
                 (
                   s.copy(approvals = approvals),
                   Outcome.Asked(request, Option.when(isNew)(turn))

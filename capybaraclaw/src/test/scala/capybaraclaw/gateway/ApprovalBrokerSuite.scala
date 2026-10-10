@@ -42,7 +42,8 @@ class ApprovalBrokerSuite extends munit.FunSuite:
           1,
           sessionId,
           "slack:U_alice",
-          Permission.Files("/data", Permission.FileAccess.ReadWrite)
+          Permission.Files("/data", Permission.FileAccess.ReadWrite),
+          account = "slack:U_alice"
         )
       )
     )
@@ -517,6 +518,25 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     val (allowed, message) = answer(broker.oracle(sessionId)(request("/data")))
     assert(!allowed, "the withdrawn request granted nothing")
     assert(message.exists(_.contains("permission request #2")), message)
+
+  test(
+    "an answer from the asking account, now linked to someone else, withdraws the request"
+  ):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(identities(teamJson.replace("\"alice\": {", "\"alicia\": {")))
+    broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin) match
+      case Right(ApprovalResolution.Withdrawn(request, reason)) =>
+        assertEquals(request.id, 1)
+        assertEquals(
+          reason,
+          "slack:U_alice asked as alice but is now linked to alicia"
+        )
+      case other => fail(s"expected a withdrawal, got $other")
+    assertEquals(
+      broker.resolve(sessionId, Some(1), ApprovalDecision.Approve, origin),
+      Left("No pending permission request #1 in this session.")
+    )
 
   test("denying is always possible, even after losing every role"):
     val (broker, _, ids) = teamBroker()

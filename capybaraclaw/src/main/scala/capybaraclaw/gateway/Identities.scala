@@ -1,14 +1,15 @@
 package capybaraclaw.gateway
 
-import java.io.File
-import java.nio.charset.StandardCharsets
-import java.io.IOException
+import java.io.{File, IOException}
+import java.nio.ByteBuffer
+import java.nio.charset.{CharacterCodingException, StandardCharsets}
 import java.nio.file.{Files, NoSuchFileException}
 import java.nio.file.attribute.{BasicFileAttributes, FileTime}
 import java.util.concurrent.atomic.AtomicReference
 
 import org.slf4j.LoggerFactory
 
+import scala.collection.immutable.ArraySeq
 import scala.util.control.NonFatal
 
 import capybaraclaw.agent.{ConfigError, ConfigKeys}
@@ -231,61 +232,101 @@ object Identities:
 /** `identities.json`, re-read whenever its modification time or size
   * changes, so that roles and links apply without a restart. A change that
   * does not load, or a file that cannot be read, keeps the previous identities
-  * in force and is logged; a deleted file links nobody. The file failing at
-  * startup is an error, as with any configuration.
+  * in force and is logged once; a deleted file links nobody. The file failing
+  * at startup is an error, as with any configuration.
   */
 final class IdentitiesFile(file: File, operator: Option[String] = None):
+  import IdentitiesFile.*
+
   private val logger = LoggerFactory.getLogger(classOf[IdentitiesFile])
 
-  /** `None` stamp and text: the file does not exist. */
+  /** `stamp` and `bytes` are what was last read (`None`: no file), `readAt`
+    * when; `identities` the last version that loaded. `unreadable` is set
+    * once a read failure is logged, until a read succeeds.
+    */
   private final case class Loaded(
-      stamp: Option[(FileTime, Long)],
-      raw: Option[String],
-      identities: Identities
-  )
+      stamp: Option[Stamp],
+      bytes: Option[ArraySeq[Byte]],
+      readAt: Long,
+      identities: Identities,
+      unreadable: Boolean = false
+  ):
+    /** Modified so close to when it was read that a later edit of the same
+      * size could keep the same modification time on a file system with
+      * coarse timestamps; such a file is compared by content until then.
+      */
+    def racy: Boolean =
+      stamp.exists((modified, _) => readAt - modified.toMillis < RacyMillis)
 
   private val loaded =
     val stamp = stampNow()
-    val raw = read(stamp)
-    AtomicReference(Loaded(stamp, raw, load(raw)))
+    val bytes = read(stamp)
+    AtomicReference(Loaded(stamp, bytes, now(), load(bytes)))
 
   def current(): Identities =
     val last = loaded.get()
     try
       val stamp = stampNow()
-      if stamp == last.stamp then last.identities
+      if stamp == last.stamp && !last.racy && !last.unreadable then
+        last.identities
       else
-        val raw = read(stamp)
+        val bytes = read(stamp)
         val next =
-          if raw == last.raw then last.copy(stamp = stamp)
+          if bytes == last.bytes then
+            last.copy(stamp = stamp, readAt = now(), unreadable = false)
           else
-            try Loaded(stamp, raw, load(raw))
+            try Loaded(stamp, bytes, now(), load(bytes))
             catch
-              case e: ConfigError =>
+              case NonFatal(e) =>
                 logger.warn(s"keeping the previous identities: ${e.getMessage}")
                 // Not parsed again, nor warned about, until the file changes.
-                last.copy(stamp = stamp)
+                last.copy(
+                  stamp = stamp,
+                  bytes = bytes,
+                  readAt = now(),
+                  unreadable = false
+                )
         val _ = loaded.compareAndSet(last, next)
         next.identities
     catch
       case e: IOException =>
-        // Read again next time: the file may be readable once more.
-        logger.warn(
-          s"keeping the previous identities: cannot read ${file.getPath}: $e"
-        )
+        // Read again next time, as the file may be readable once more, but
+        // warn only once.
+        if !last.unreadable then
+          logger.warn(
+            s"keeping the previous identities: cannot read ${file.getPath}: $e"
+          )
+          val _ = loaded.compareAndSet(last, last.copy(unreadable = true))
         last.identities
 
-  private def stampNow(): Option[(FileTime, Long)] =
+  private def stampNow(): Option[Stamp] =
     try
       val attributes =
         Files.readAttributes(file.toPath, classOf[BasicFileAttributes])
       Some((attributes.lastModifiedTime, attributes.size))
     catch case _: NoSuchFileException => None
 
-  private def read(stamp: Option[(FileTime, Long)]): Option[String] =
-    stamp.map(_ => Files.readString(file.toPath, StandardCharsets.UTF_8))
+  private def read(stamp: Option[Stamp]): Option[ArraySeq[Byte]] =
+    stamp.map(_ => ArraySeq.unsafeWrapArray(Files.readAllBytes(file.toPath)))
 
-  private def load(raw: Option[String]): Identities =
-    val identities =
-      raw.fold(Identities.empty)(Identities.parse(_, file.getPath))
+  private def load(bytes: Option[ArraySeq[Byte]]): Identities =
+    val identities = bytes.fold(Identities.empty): b =>
+      val text =
+        try
+          StandardCharsets.UTF_8
+            .newDecoder()
+            .decode(ByteBuffer.wrap(b.toArray))
+            .toString
+        catch
+          case _: CharacterCodingException =>
+            throw ConfigError(s"${file.getPath} is not valid UTF-8")
+      Identities.parse(text, file.getPath)
     operator.fold(identities)(identities.withOperator)
+
+  private def now(): Long = System.currentTimeMillis()
+
+object IdentitiesFile:
+  private type Stamp = (FileTime, Long)
+
+  /** Coarser than any file system's timestamps (FAT has 2 seconds). */
+  private val RacyMillis = 2000L
