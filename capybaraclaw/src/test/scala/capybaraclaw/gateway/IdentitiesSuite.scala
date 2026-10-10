@@ -322,6 +322,18 @@ class IdentitiesSuite extends munit.FunSuite:
       Set("xdmin")
     )
 
+  test("a timestamp ahead of the clock does not keep the file being re-read"):
+    val file = os.temp(adminJson, suffix = ".json")
+    os.mtime.set(file, System.currentTimeMillis() + 3_600_000)
+    val source = IdentitiesFile(file.toIO)
+    val future = os.mtime(file)
+    os.write.over(file, adminJson.replace("\"admin\"", "\"xdmin\""))
+    os.mtime.set(file, future) // same size and timestamp: trusted, not read
+    assertEquals(
+      source.current().person(slack, UserId("U1")).roles,
+      Set("admin")
+    )
+
   test("a change that is not valid UTF-8 keeps the previous identities"):
     val file = os.temp(adminJson, suffix = ".json")
     val source = IdentitiesFile(file.toIO)

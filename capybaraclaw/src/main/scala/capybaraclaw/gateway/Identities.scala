@@ -256,7 +256,11 @@ final class IdentitiesFile(file: File, operator: Option[String] = None):
       * coarse timestamps; such a file is compared by content until then.
       */
     def racy: Boolean =
-      stamp.exists((modified, _) => readAt - modified.toMillis < RacyMillis)
+      stamp.exists: (modified, _) =>
+        val age = readAt - modified.toMillis
+        // A timestamp ahead of the clock (skew on a network mount) would
+        // never age out; such a file is trusted to its timestamp.
+        age >= 0 && age < RacyMillis
 
   private val loaded =
     val stamp = stampNow()

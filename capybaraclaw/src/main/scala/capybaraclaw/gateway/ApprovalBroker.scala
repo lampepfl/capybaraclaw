@@ -75,11 +75,19 @@ final class ApprovalBroker(identities: () => Identities):
     val person = ids.person(by.port, by.user)
     val account = s"${by.port}:${by.user}"
     update: s =>
-      val relinked = requestId
-        .flatMap(s.approvals.pending.get)
-        .filter: r =>
-          r.sessionId == sessionId && r.account == account &&
-            r.requester != person.id
+      def askedAs(r: ApprovalRequest) =
+        r.sessionId == sessionId && r.account == account &&
+          r.requester != person.id
+      val relinked = requestId match
+        case Some(id) => s.approvals.pending.get(id).filter(askedAs)
+        // Without an id their own latest request comes first.
+        case None =>
+          s.approvals
+            .answerable(Grantee(sessionId, person.id), None)
+            .fold(
+              _ => s.approvals.pending.values.filter(askedAs).maxByOption(_.id),
+              _ => None
+            )
       relinked match
         case Some(request) =>
           (

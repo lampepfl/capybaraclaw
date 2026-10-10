@@ -303,8 +303,10 @@ class SlackPort(bot: SlackApi) extends Port:
             s":white_check_mark: Allowed for this session by <@${by.user}>"
           case ApprovalResolution.Answered(_, ApprovalDecision.Deny) =>
             s":no_entry: Denied by <@${by.user}>"
-          case ApprovalResolution.Withdrawn(_, reason) =>
-            s":no_entry: Withdrawn: $reason"
+          // The reason may name people from identities.json, which this
+          // shared message should not reveal; the agent is told it.
+          case ApprovalResolution.Withdrawn(_, _) =>
+            ":no_entry: Withdrawn: no longer allowed"
         bestEffort(s"closing prompt #$id"):
           bot.closeApprovalPrompt(
             pending.channel,

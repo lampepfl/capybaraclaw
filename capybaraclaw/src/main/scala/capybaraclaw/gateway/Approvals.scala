@@ -68,8 +68,9 @@ object Permission:
     texts.toList.sorted.map(quote).mkString(", ")
 
 /** `requester` is the [[Person.id]] whose turn asked; only they may answer.
-  * `account` is the `"<port>:<user>"` they asked from. `reason` is the requester's own explanation (the agent's, or for
-  * [[Permission.Plugin]] the plugin's), shown to the user as such.
+  * `account` is the `"<port>:<user>"` they asked from. `reason` is the
+  * requester's own explanation (the agent's, or for [[Permission.Plugin]] the
+  * plugin's), shown to the user as such.
   */
 final case class ApprovalRequest(
     id: Int,

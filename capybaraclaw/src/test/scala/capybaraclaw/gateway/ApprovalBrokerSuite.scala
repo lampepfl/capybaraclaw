@@ -538,6 +538,17 @@ class ApprovalBrokerSuite extends munit.FunSuite:
       Left("No pending permission request #1 in this session.")
     )
 
+  test(
+    "an answer without an id from the relinked account withdraws its latest request"
+  ):
+    val (broker, _, ids) = teamBroker()
+    val _ = broker.oracle(sessionId)(request("/data"))
+    ids.set(identities(teamJson.replace("\"alice\": {", "\"alicia\": {")))
+    broker.resolve(sessionId, None, ApprovalDecision.Approve, origin) match
+      case Right(ApprovalResolution.Withdrawn(request, _)) =>
+        assertEquals(request.id, 1)
+      case other => fail(s"expected a withdrawal, got $other")
+
   test("denying is always possible, even after losing every role"):
     val (broker, _, ids) = teamBroker()
     val _ = broker.oracle(sessionId)(request("/data"))
