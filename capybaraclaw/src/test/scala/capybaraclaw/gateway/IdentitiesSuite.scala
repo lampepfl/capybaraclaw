@@ -45,6 +45,18 @@ class IdentitiesSuite extends munit.FunSuite:
     assertEquals(ids.person(slack, UserId("U1")), expected)
     assertEquals(ids.person(slack, UserId("U2")), Person("slack:U2", Set.empty))
 
+  test("accounts lists every id linked to the same person"):
+    val ids = load(
+      """{"people": {"ann": {"ids": ["slack:U1", "cli:ann"]}, "bob": {"ids": ["slack:U2"]}}}"""
+    )
+    assertEquals(ids.accounts(slack, UserId("U1")), Set("slack:U1", "cli:ann"))
+    assertEquals(
+      ids.accounts(PortId("cli"), UserId("ann")),
+      Set("slack:U1", "cli:ann")
+    )
+    assertEquals(ids.accounts(slack, UserId("U2")), Set("slack:U2"))
+    assertEquals(ids.accounts(slack, UserId("U3")), Set("slack:U3"))
+
   test("default roles go to people not listed and listed without roles"):
     val ids = load(
       """{"roles": {"guest": {"may": []}, "dev": {"may": []}},

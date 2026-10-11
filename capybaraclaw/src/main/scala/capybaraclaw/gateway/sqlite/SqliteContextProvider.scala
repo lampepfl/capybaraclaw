@@ -4,14 +4,18 @@ import capybaraclaw.gateway.{
   ContextProvider,
   Discovery,
   FullMessage,
+  PortId,
+  SearchScope,
   SearchSort,
   SearchTerms,
   SessionHandle,
   SessionId,
   SessionMetadata,
+  SessionScope,
   SessionSearch,
   SessionSummary,
-  SessionWindow
+  SessionWindow,
+  UserId
 }
 import org.flywaydb.core.Flyway
 import org.sqlite.{SQLiteErrorCode, SQLiteException}
@@ -124,7 +128,7 @@ class SqliteContextProvider(
       offset: Int,
       window: Int,
       sort: SearchSort,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): Discovery =
     FtsQuery.compile(terms) match
       case None            => Discovery(0, Nil)
@@ -137,14 +141,15 @@ class SqliteContextProvider(
             offset,
             window,
             sort,
-            excludeSession
+            scope
           )
 
   def scroll(
       sessionId: SessionId,
       aroundMessageId: Long,
       window: Int,
-      fullText: Boolean
+      fullText: Boolean,
+      scope: SearchScope
   ): Option[SessionWindow] =
     readers.withReader: reader =>
       SessionSearchQueries.scroll(
@@ -152,23 +157,70 @@ class SqliteContextProvider(
         sessionId,
         aroundMessageId,
         window,
-        fullText
+        fullText,
+        scope
       )
 
-  def get(
-      ids: List[Long],
-      excludeSession: Option[SessionId]
-  ): List[FullMessage] =
+  def get(ids: List[Long], scope: SearchScope): List[FullMessage] =
     readers.withReader: reader =>
-      SessionSearchQueries.get(reader, ids, excludeSession)
+      SessionSearchQueries.get(reader, ids, scope)
 
   def browse(
       limit: Int,
       offset: Int,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): List[SessionSummary] =
     readers.withReader: reader =>
-      SessionSearchQueries.browse(reader, limit, offset, excludeSession)
+      SessionSearchQueries.browse(reader, limit, offset, scope)
+
+  def recordScope(sessionId: SessionId, scope: SessionScope): Unit =
+    val (kind, port, value) = scope match
+      case SessionScope.Direct(port, user)   => ("direct", port, user)
+      case SessionScope.Group(port, channel) => ("group", port, channel)
+    val sql =
+      """UPDATE sessions SET scope_kind = ?, scope_port = ?, scope_value = ?
+        |WHERE id = ? AND scope_kind IS NULL""".stripMargin
+    writeLock.synchronized:
+      SqliteJdbc.withStatement(writer, sql): stmt =>
+        stmt.setString(1, kind)
+        stmt.setString(2, port)
+        stmt.setString(3, value)
+        stmt.setString(4, sessionId)
+        stmt.executeUpdate()
+        ()
+
+  def scopeOf(sessionId: SessionId): Option[SessionScope] =
+    val sql =
+      "SELECT scope_kind, scope_port, scope_value FROM sessions WHERE id = ?"
+    readers.withReader: reader =>
+      SqliteJdbc.withStatement(reader, sql): stmt =>
+        stmt.setString(1, sessionId)
+        SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
+          if !rs.next() then None
+          else
+            val port = Option(rs.getString("scope_port"))
+            val value = Option(rs.getString("scope_value"))
+            (Option(rs.getString("scope_kind")), port, value) match
+              case (Some("direct"), Some(p), Some(v)) =>
+                Some(SessionScope.Direct(PortId(p), UserId(v)))
+              case (Some("group"), Some(p), Some(v)) =>
+                Some(SessionScope.Group(PortId(p), v))
+              case _ => None
+
+  /** Gives sessions recorded before scopes existed, and without a handle, to
+    * `owner` as private ones: only the CLI starts sessions without a handle,
+    * so they are the operator's. Sessions with a handle keep no scope.
+    */
+  def adoptUnscopedCliSessions(owner: SessionScope.Direct): Int =
+    val sql =
+      """UPDATE sessions SET scope_kind = 'direct', scope_port = ?, scope_value = ?
+        |WHERE scope_kind IS NULL
+        |  AND NOT EXISTS (SELECT 1 FROM session_handles h WHERE h.session_id = sessions.id)""".stripMargin
+    writeLock.synchronized:
+      SqliteJdbc.withStatement(writer, sql): stmt =>
+        stmt.setString(1, owner.port)
+        stmt.setString(2, owner.user)
+        stmt.executeUpdate()
 
   def close(): Unit =
     writeLock.synchronized:

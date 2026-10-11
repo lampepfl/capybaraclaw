@@ -1,6 +1,6 @@
 package capybaraclaw.agent.tools
 
-import capybaraclaw.gateway.SessionId
+import capybaraclaw.gateway.*
 import capybaraclaw.gateway.sqlite.SqliteContextProvider
 import tacit.agents.llm.endpoint.Message
 import tacit.agents.llm.utils.IsToolArg
@@ -23,11 +23,14 @@ class SessionSearchToolSuite extends munit.FunSuite:
     val args = summon[IsToolArg[SessionSearchTool.Args]]
       .parse(json)
       .fold(e => fail(s"args did not parse: $e"), identity)
-    ujson.read(SessionSearchTool.run(p, current, args))
+    val scope =
+      SearchScope(current, "/work", Visibility.DirectWith(Set("cli:me")))
+    ujson.read(SessionSearchTool.run(p, scope, args))
 
   /** A session with one message per text; returns its id. */
   private def session(p: SqliteContextProvider, texts: String*): SessionId =
     val sid = p.createSession("/work")
+    p.recordScope(sid, SessionScope.Direct(PortId("cli"), UserId("me")))
     texts.foreach(t => p.append(sid, Message.user(t)))
     sid
 

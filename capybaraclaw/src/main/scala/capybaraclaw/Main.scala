@@ -11,7 +11,9 @@ import capybaraclaw.gateway.{
   IdentitiesFile,
   MemoryDirectory,
   SessionId,
-  SessionMetadata
+  SessionMetadata,
+  SessionScope,
+  UserId
 }
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.{CliPort, SessionFormatting}
@@ -99,6 +101,9 @@ private object ClawMain extends CaseApp[CliOptions]:
         )
         val memory = MemoryDirectory.default(identities.current)
         memory.migrateLegacy(memory.person(CliPort.Id, cliUser))
+        contextProvider.adoptUnscopedCliSessions(
+          SessionScope.Direct(CliPort.Id, UserId(cliUser))
+        )
 
         Async.blocking:
           val slackPort: Option[SlackPort] =
@@ -122,16 +127,18 @@ private object ClawMain extends CaseApp[CliOptions]:
             ports,
             contextProvider,
             memory,
-            clawFactory = (wd, sid, hist, access, oracle) =>
+            clawFactory = (wd, sid, hist, access, oracle, searchScope) =>
               ClawAgent(
                 wd,
                 sid,
                 contextProvider,
+                searchScope,
                 initialMessages = hist,
                 memory = access,
                 permissionOracle = Some(oracle)
               ),
-            approvals = ApprovalBroker(identities.current)
+            approvals = ApprovalBroker(identities.current),
+            identities = identities.current
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())

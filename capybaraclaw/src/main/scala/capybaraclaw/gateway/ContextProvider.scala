@@ -40,3 +40,13 @@ trait ContextProvider:
 
   /** Append a single message to this session's transcript. */
   def append(sessionId: SessionId, msg: Message): Unit
+
+  /** Record who may find the session through session search, unless already
+    * recorded: the first message decides.
+    */
+  def recordScope(sessionId: SessionId, scope: SessionScope): Unit
+
+  /** The recorded scope; `None` for unknown sessions and those recorded
+    * before scopes existed.
+    */
+  def scopeOf(sessionId: SessionId): Option[SessionScope]

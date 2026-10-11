@@ -11,22 +11,42 @@ import java.util.concurrent.atomic.AtomicLong
   */
 class SessionSearchSuite extends munit.FunSuite:
   private val WD = "/work"
+  private val Me: SessionScope.Direct =
+    SessionScope.Direct(PortId("cli"), UserId("me"))
+
+  /** What a private session of `Me` in `WD` may see. */
+  private def mine(current: SessionId = SessionId.random()): SearchScope =
+    SearchScope(current, WD, Visibility.DirectWith(Set("cli:me")))
 
   private class Fixture(val provider: SqliteContextProvider):
     private val nextId = AtomicLong(0)
 
-    /** A session with alternating user and assistant messages; returns its id
-      * and the ids of its messages.
+    /** A private session of `Me` with alternating user and assistant
+      * messages; returns its id and the ids of its messages.
       */
     def session(texts: String*): (SessionId, List[Long]) =
+      sessionIn(Me)(texts*)
+
+    def sessionIn(scope: SessionScope, workdir: String = WD)(
+        texts: String*
+    ): (SessionId, List[Long]) =
+      val sid = provider.createSession(workdir)
+      provider.recordScope(sid, scope)
+      (sid, appendAll(sid, texts))
+
+    /** A session recorded before scopes existed. */
+    def unscoped(texts: String*): (SessionId, List[Long]) =
       val sid = provider.createSession(WD)
+      (sid, appendAll(sid, texts))
+
+    private def appendAll(sid: SessionId, texts: Seq[String]): List[Long] =
       val ids = texts.toList.zipWithIndex.map: (text, i) =>
         provider.append(
           sid,
           if i % 2 == 0 then Message.user(text) else Message.assistant(text)
         )
         nextId.incrementAndGet()
-      (sid, ids)
+      ids
 
     def discover(
         terms: SearchTerms,
@@ -34,9 +54,9 @@ class SessionSearchSuite extends munit.FunSuite:
         offset: Int = 0,
         window: Int = 2,
         sort: SearchSort = SearchSort.Rank,
-        exclude: Option[SessionId] = None
+        scope: SearchScope = mine()
     ): Discovery =
-      provider.discover(terms, limit, offset, window, sort, exclude)
+      provider.discover(terms, limit, offset, window, sort, scope)
 
   private val fixture = FunFixture[Fixture](
     setup = _ =>
@@ -76,7 +96,7 @@ class SessionSearchSuite extends munit.FunSuite:
   fixture.test("discover excludes the current session"): f =>
     val (a, _) = f.session("[u] docker here")
     val (b, _) = f.session("[u] docker there")
-    val found = f.discover(all("docker"), exclude = Some(a))
+    val found = f.discover(all("docker"), scope = mine(a))
     assertEquals(found.hits.map(_.session.sessionId), List(b))
     assertEquals(found.totalSessions, 1)
 
@@ -167,11 +187,11 @@ class SessionSearchSuite extends munit.FunSuite:
 
   fixture.test("scroll returns metadata by default and text when asked"): f =>
     val (sid, ids) = f.session("[u] one", "two", "[u] three", "four")
-    val meta = f.provider.scroll(sid, ids(1), 1, fullText = false).get
+    val meta = f.provider.scroll(sid, ids(1), 1, fullText = false, mine()).get
     assertEquals(meta.messages.map(_.message.id), ids.take(3))
     assert(meta.messages.forall(_.text.isEmpty))
     assertEquals(meta.messages.map(_.message.length), List(7, 3, 9))
-    val full = f.provider.scroll(sid, ids(1), 1, fullText = true).get
+    val full = f.provider.scroll(sid, ids(1), 1, fullText = true, mine()).get
     assertEquals(
       full.messages.flatMap(_.text),
       List("[u] one", "two", "[u] three")
@@ -181,10 +201,14 @@ class SessionSearchSuite extends munit.FunSuite:
   fixture.test("scroll refuses a message id from another session"): f =>
     val (a, _) = f.session("[u] in a")
     val (_, bIds) = f.session("[u] in b")
-    assertEquals(f.provider.scroll(a, bIds.head, 5, fullText = true), None)
-    assertEquals(f.provider.scroll(a, 999L, 5, fullText = true), None)
     assertEquals(
-      f.provider.scroll(SessionId.random(), bIds.head, 5, fullText = true),
+      f.provider.scroll(a, bIds.head, 5, fullText = true, mine()),
+      None
+    )
+    assertEquals(f.provider.scroll(a, 999L, 5, fullText = true, mine()), None)
+    assertEquals(
+      f.provider
+        .scroll(SessionId.random(), bIds.head, 5, fullText = true, mine()),
       None
     )
 
@@ -193,11 +217,11 @@ class SessionSearchSuite extends munit.FunSuite:
   ): f =>
     val (a, aIds) = f.session("[u] alpha", "beta")
     val (b, bIds) = f.session("[u] gamma")
-    val got = f.provider.get(List(bIds.head, aIds(1), 999L, aIds.head), Some(a))
+    val got = f.provider.get(List(bIds.head, aIds(1), 999L, aIds.head), mine(a))
     assertEquals(got.map(_.message.id), bIds)
     assertEquals(got.map(_.text), List("[u] gamma"))
     assertEquals(got.map(_.sessionId), List(b))
-    val all = f.provider.get(List(bIds.head, aIds(1)), None)
+    val all = f.provider.get(List(bIds.head, aIds(1)), mine())
     assertEquals(all.map(_.text), List("beta", "[u] gamma"))
 
   fixture.test("browse orders by last activity, excluding the current session"):
@@ -206,7 +230,120 @@ class SessionSearchSuite extends munit.FunSuite:
       val (b, _) = f.session()
       val (c, _) = f.session("[u] third")
       f.provider.verifyAndTouchSession(a, WD)
-      val sessions = f.provider.browse(10, 0, Some(c))
+      val sessions = f.provider.browse(10, 0, mine(c))
       assertEquals(sessions.map(_.sessionId), List(a, b))
       assertEquals(sessions.map(_.messageCount), List(2, 0))
       assertEquals(sessions.map(_.title), List("first", "(untitled session)"))
+
+  /** Whether `scope` finds `target`, whose messages include "needle", in each
+    * mode.
+    */
+  private def findsIn(
+      f: Fixture,
+      scope: SearchScope,
+      target: SessionId,
+      ids: List[Long]
+  ): Map[String, Boolean] =
+    val discovered = f.discover(all("needle"), scope = scope)
+    Map(
+      "discover" -> discovered.hits.exists(_.session.sessionId == target),
+      "count" -> (discovered.totalSessions > 0),
+      "browse" -> f.provider
+        .browse(25, 0, scope)
+        .exists(_.sessionId == target),
+      "scroll" -> f.provider.scroll(target, ids.head, 5, true, scope).isDefined,
+      "get" -> f.provider.get(ids, scope).nonEmpty
+    )
+
+  private def assertFinds(found: Map[String, Boolean], expected: Boolean)(using
+      munit.Location
+  ): Unit =
+    assertEquals(found, found.map((mode, _) => mode -> expected))
+
+  fixture.test(
+    "a private session is found only by its person, in every mode"
+  ): f =>
+    val alice = SessionScope.Direct(PortId("slack"), UserId("U_alice"))
+    val (target, ids) = f.sessionIn(alice)("[u] the needle salary", "ok")
+    def direct(accounts: String*) =
+      SearchScope(SessionId.random(), WD, Visibility.DirectWith(accounts.toSet))
+    assertFinds(
+      findsIn(f, direct("slack:U_alice", "cli:alice"), target, ids),
+      true
+    )
+    assertFinds(findsIn(f, direct("cli:alice"), target, ids), false)
+    assertFinds(findsIn(f, direct("slack:U_bob"), target, ids), false)
+    assertFinds(findsIn(f, direct(), target, ids), false)
+    val channel = SearchScope(
+      SessionId.random(),
+      WD,
+      Visibility.InChannel(PortId("slack"), "C1")
+    )
+    assertFinds(findsIn(f, channel, target, ids), false)
+
+  fixture.test("a shared session is found only from its channel"): f =>
+    val (target, ids) =
+      f.sessionIn(SessionScope.Group(PortId("slack"), "C1"))("[u] needle")
+    def in(port: String, channel: String) = SearchScope(
+      SessionId.random(),
+      WD,
+      Visibility.InChannel(PortId(port), channel)
+    )
+    assertFinds(findsIn(f, in("slack", "C1"), target, ids), true)
+    assertFinds(findsIn(f, in("slack", "C2"), target, ids), false)
+    assertFinds(findsIn(f, in("discord", "C1"), target, ids), false)
+    val direct = SearchScope(
+      SessionId.random(),
+      WD,
+      Visibility.DirectWith(Set("slack:C1", "slack:U_alice"))
+    )
+    assertFinds(findsIn(f, direct, target, ids), false)
+
+  fixture.test("a session in another workdir is never found"): f =>
+    val (target, ids) = f.sessionIn(Me, workdir = "/other")("[u] needle")
+    assertFinds(findsIn(f, mine(), target, ids), false)
+    val there =
+      SearchScope(
+        SessionId.random(),
+        "/other",
+        Visibility.DirectWith(Set("cli:me"))
+      )
+    assertFinds(findsIn(f, there, target, ids), true)
+
+  fixture.test("a session without a recorded scope is found by nobody"): f =>
+    val (target, ids) = f.unscoped("[u] needle")
+    assertFinds(findsIn(f, mine(), target, ids), false)
+    val (own, ownIds) = f.session("[u] needle")
+    assertFinds(findsIn(f, mine(), own, ownIds), true)
+    val nobody = SearchScope(SessionId.random(), WD, Visibility.NoSessions)
+    assertFinds(findsIn(f, nobody, own, ownIds), false)
+
+  fixture.test("the first recorded scope stays"): f =>
+    val sid = f.provider.createSession(WD)
+    f.provider.recordScope(sid, SessionScope.Group(PortId("slack"), "C1"))
+    f.provider.recordScope(sid, Me)
+    assertEquals(
+      f.provider.scopeOf(sid),
+      Some(SessionScope.Group(PortId("slack"), "C1"))
+    )
+    assertEquals(f.provider.scopeOf(f.provider.createSession(WD)), None)
+    assertEquals(f.provider.scopeOf(SessionId.random()), None)
+
+  fixture.test(
+    "unscoped sessions without a handle go to the operator, the rest stay unscoped"
+  ): f =>
+    val cli = f.provider.createSession(WD)
+    val slack = f.provider.resolveOrCreateHandle(
+      WD,
+      SessionHandle(PortId("slack"), "C1/1")
+    )
+    val (scoped, _) =
+      f.sessionIn(SessionScope.Group(PortId("slack"), "C2"))()
+    assertEquals(f.provider.adoptUnscopedCliSessions(Me), 1)
+    assertEquals(f.provider.scopeOf(cli), Some(Me))
+    assertEquals(f.provider.scopeOf(slack), None)
+    assertEquals(
+      f.provider.scopeOf(scoped),
+      Some(SessionScope.Group(PortId("slack"), "C2"))
+    )
+    assertEquals(f.provider.adoptUnscopedCliSessions(Me), 0)
