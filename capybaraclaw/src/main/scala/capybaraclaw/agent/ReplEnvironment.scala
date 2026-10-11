@@ -21,6 +21,9 @@ final class ReplEnvironment(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
       executionTimeoutMs = Some(executionTimeoutMs.toLong),
+      // Tacit logs to stderr, which is the operator's terminal here;
+      // capybaraclaw logs what matters itself.
+      quiet = true,
       libraryConfig = Json.obj(
         "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
         // Relative paths in agent code mean the workdir, wherever the

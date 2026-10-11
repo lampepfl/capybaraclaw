@@ -46,7 +46,7 @@ class ClawAgent(
       def getInitState = new AgentState:
         val llmConfig = agentConfig.toLLMConfig(apiReference)
 
-    EvalScalaTool.register(a, replEnv.repl)
+    EvalScalaTool.register(a, replEnv.repl, sessionId)
     MemoryTool.register(a, memory)
     SessionSearchTool.register(a, sessionSearch, sessionId)
     ShowInterfaceTool.register(a, apiReference)
