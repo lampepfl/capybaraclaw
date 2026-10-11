@@ -31,8 +31,8 @@ jobs:
       - name: Checkout tacit
         uses: actions/checkout@v6
         with:
-          repository: warcholjakub/tacit
-          ref: fdbda4a77efedc86d8cda7155d84ae3e33c28df9
+          repository: virtuslab/tacit
+          ref: c24278c7dbfd7c3b893d3599d1918c71416c6c74
           path: tacit
       - name: Publish tacit locally
         working-directory: tacit
