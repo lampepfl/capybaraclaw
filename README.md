@@ -19,6 +19,20 @@ Then, inside `capybaraclaw/`, run `sbt test` for a sanity-check. It should build
 
 Do `sbt claw`. This requires a valid `OPENROUTER_API_KEY` in the environment.
 
+### Configuration: `claw.json`
+
+An optional `claw.json` in the workdir configures the agent. Every key is
+optional; an unknown key or a wrong type stops capybara with an error naming
+the key. The agent can read the file but never change it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `provider` | `"openrouter"` | LLM provider: `anthropic`, `openai`, `openrouter` or `ollama`. Its API key comes from the environment. |
+| `model` | `"minimax/minimax-m2.7"` | Model id at that provider. |
+| `max_tokens` | `16000` | Output token limit per response. |
+| `classified_paths` | `[]` | Extra paths whose content the agent only gets as `Classified`, on top of TACIT's defaults (`.ssh`, `.env`, …). |
+| `execution_timeout_ms` | `120000` | Time limit for one `evaluate_scala` call. A runaway loop in agent code is stopped when it runs out, and a long `exec` or LLM call is interrupted, so raise it for long builds. |
+
 ## Connecting to Slack
 
 Pass `--enable-slack`; capybara then also needs `SLACK_BOT_TOKEN` (`xoxb-…`)

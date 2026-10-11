@@ -163,42 +163,49 @@ class ReplEnvironmentSuite extends munit.FunSuite:
       result.output + result.error.getOrElse("")
     )
 
-  workDir.test("a runaway loop times out and does not block other sessions"):
-    dir =>
-      val stuck = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
-      val other = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
-      val sessionId = SessionId.random()
-      // Ignores interrupts. Safe mode has no clock, so it is bounded by work:
-      // each step waits for the previous multiply, which takes seconds for
-      // 4e9 steps, well past the timeout, and still ends soon after the test.
-      val loop =
-        """def spin(n: Long): Long =
-          |  var acc = 0L
-          |  var i = 0L
-          |  while i < n do
-          |    acc = acc * 31 + i
-          |    i += 1
-          |  acc
-          |spin(4000000000L)""".stripMargin
-      val timedOut = EvalScalaTool.evaluate(stuck.repl, sessionId, loop)
+  workDir.test("a runaway loop is stopped at the timeout"): dir =>
+    val env = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 1000)
+    val sessionId = SessionId.random()
+    val stopped =
+      EvalScalaTool.evaluate(env.repl, sessionId, "while true do ()")
+    assert(stopped.contains("timed out"), stopped)
+    assert(!stopped.contains(EvalScalaTool.BlockedGuidance), stopped)
+    val after = EvalScalaTool.evaluate(env.repl, sessionId, "1 + 1")
+    assert(after.contains("2"), after)
+
+  workDir.test(
+    "a run stuck outside REPL code blocks only its conversation, and the agent is told why"
+  ): dir =>
+    // An oracle that never answers until released keeps the run outside REPL
+    // code, where the timeout cannot stop it.
+    val gate = java.util.concurrent.CountDownLatch(1)
+    val blocking: String => String = _ =>
+      var waiting = true
+      while waiting do
+        try
+          gate.await()
+          waiting = false
+        catch case _: InterruptedException => ()
+      """{"allow":false}"""
+    val stuck = ReplEnvironment(dir.toString, Nil, Some(blocking), 500)
+    val other = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
+    val sessionId = SessionId.random()
+    try
+      val timedOut = EvalScalaTool.evaluate(
+        stuck.repl,
+        sessionId,
+        """requestFileSystem("/") { () }"""
+      )
       assert(timedOut.contains("keeps running"), timedOut)
       assert(timedOut.contains(EvalScalaTool.BlockedGuidance), timedOut)
 
-      val started = System.nanoTime
-      val result = other.repl.execute("1 + 1")
-      assert(result.output.contains("2"), result.output)
-      assert((System.nanoTime - started) / 1000000 < 5000)
+      val result = EvalScalaTool.evaluate(other.repl, sessionId, "1 + 1")
+      assert(result.contains("2"), result)
 
       val refused = EvalScalaTool.evaluate(stuck.repl, sessionId, "1 + 1")
       assert(refused.contains(ManagedRepl.StillRunningMessage), refused)
       assert(refused.contains(EvalScalaTool.BlockedGuidance), refused)
-      assert(
-        !EvalScalaTool
-          .evaluate(other.repl, sessionId, "1 +")
-          .contains(
-            EvalScalaTool.BlockedGuidance
-          )
-      )
+    finally gate.countDown()
 
   private def existsCode(path: Path): String =
     s"""requestFileSystem("$path") { access("$path").exists }"""

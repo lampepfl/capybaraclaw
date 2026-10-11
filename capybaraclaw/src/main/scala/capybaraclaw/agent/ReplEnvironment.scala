@@ -20,7 +20,7 @@ final class ReplEnvironment(
   // than risking the gateway running out of memory. The gateway shows the
   // message to the user, and the next message tries again.
   ManagedRepl.abandonedLimitReached.foreach: _ =>
-    throw IllegalStateException(
+    throw ReplEnvironment.Refused(
       s"Capybara can't start a new conversation right now: ${ManagedRepl.abandonedExecutions} earlier code runs " +
         "timed out and are still running in the background. Try again later, or ask the operator to restart capybara."
     )
@@ -63,6 +63,9 @@ final class ReplEnvironment(
   val repl: ReplSession = ReplSession.create(using context)
 
 object ReplEnvironment:
+  /** A new conversation's REPL was refused; the message is for the user. */
+  final class Refused(message: String) extends RuntimeException(message)
+
   /** Workdir files that steer the gateway itself: plugin jars run as trusted
     * code in every new session, and `claw.json` and `CLAW.md` configure it.
     * The agent may read them but never change them; tacit resolves the paths
