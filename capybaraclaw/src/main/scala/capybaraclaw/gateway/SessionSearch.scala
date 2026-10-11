@@ -48,10 +48,8 @@ object SessionScope:
 
 /** Which sessions a search may see. */
 enum Visibility:
-  /** Direct sessions started from one of these accounts (`port:user`, as in
-    * [[Identities]]).
-    */
-  case DirectWith(accounts: Set[String])
+  /** Direct sessions started from one of these accounts. */
+  case DirectWith(accounts: Set[(PortId, UserId)])
 
   /** Group sessions in this channel. */
   case InChannel(port: PortId, channel: String)

@@ -24,7 +24,11 @@ class SessionSearchToolSuite extends munit.FunSuite:
       .parse(json)
       .fold(e => fail(s"args did not parse: $e"), identity)
     val scope =
-      SearchScope(current, "/work", Visibility.DirectWith(Set("cli:me")))
+      SearchScope(
+        current,
+        "/work",
+        Visibility.DirectWith(Set(PortId("cli") -> UserId("me")))
+      )
     ujson.read(SessionSearchTool.run(p, scope, args))
 
   /** A session with one message per text; returns its id. */

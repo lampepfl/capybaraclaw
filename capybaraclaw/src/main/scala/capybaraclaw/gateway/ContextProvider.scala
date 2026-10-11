@@ -50,3 +50,8 @@ trait ContextProvider:
     * before scopes existed.
     */
   def scopeOf(sessionId: SessionId): Option[SessionScope]
+
+  /** Whether a port that names sessions by id may attach `scope`'s origin to
+    * this one: the session is theirs, or new (no scope yet, no handle).
+    */
+  def canAttach(sessionId: SessionId, scope: SessionScope.Direct): Boolean

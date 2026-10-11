@@ -21,10 +21,12 @@ private[sqlite] object SessionSearchQueries:
   private def visible(scope: SearchScope): (String, List[String]) =
     val (admitted, params) = scope.visibility match
       case Visibility.DirectWith(accounts) if accounts.nonEmpty =>
-        val placeholders = accounts.toList.map(_ => "?").mkString(", ")
+        val pairs = accounts.toList.map((p, u) => (p: String, u: String)).sorted
+        val rows = pairs.map(_ => "(?, ?)").mkString(", ")
+        // Row values, so the lookup uses the whole of sessions_scope_idx.
         (
-          s"s.scope_kind = 'direct' AND s.scope_port || ':' || s.scope_value IN ($placeholders)",
-          accounts.toList.sorted
+          s"s.scope_kind = 'direct' AND (s.scope_port, s.scope_value) IN (VALUES $rows)",
+          pairs.flatMap((p, u) => List(p, u))
         )
       case Visibility.InChannel(port, channel) =>
         (

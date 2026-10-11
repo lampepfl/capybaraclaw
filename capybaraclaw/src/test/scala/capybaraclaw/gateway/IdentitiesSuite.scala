@@ -49,13 +49,18 @@ class IdentitiesSuite extends munit.FunSuite:
     val ids = load(
       """{"people": {"ann": {"ids": ["slack:U1", "cli:ann"]}, "bob": {"ids": ["slack:U2"]}}}"""
     )
-    assertEquals(ids.accounts(slack, UserId("U1")), Set("slack:U1", "cli:ann"))
+    val cli = PortId("cli")
+    val ann = Set(slack -> UserId("U1"), cli -> UserId("ann"))
+    assertEquals(ids.accounts(slack, UserId("U1")), ann)
+    assertEquals(ids.accounts(cli, UserId("ann")), ann)
+    assertEquals(ids.accounts(slack, UserId("U2")), Set(slack -> UserId("U2")))
+    assertEquals(ids.accounts(slack, UserId("U3")), Set(slack -> UserId("U3")))
+    // Only the first ':' separates the port.
+    val colon = load("""{"people": {"c": {"ids": ["slack:a:b"]}}}""")
     assertEquals(
-      ids.accounts(PortId("cli"), UserId("ann")),
-      Set("slack:U1", "cli:ann")
+      colon.accounts(slack, UserId("a:b")),
+      Set(slack -> UserId("a:b"))
     )
-    assertEquals(ids.accounts(slack, UserId("U2")), Set("slack:U2"))
-    assertEquals(ids.accounts(slack, UserId("U3")), Set("slack:U3"))
 
   test("default roles go to people not listed and listed without roles"):
     val ids = load(

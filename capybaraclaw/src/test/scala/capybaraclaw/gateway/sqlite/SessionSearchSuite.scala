@@ -16,7 +16,15 @@ class SessionSearchSuite extends munit.FunSuite:
 
   /** What a private session of `Me` in `WD` may see. */
   private def mine(current: SessionId = SessionId.random()): SearchScope =
-    SearchScope(current, WD, Visibility.DirectWith(Set("cli:me")))
+    SearchScope(current, WD, linked("cli:me"))
+
+  /** Private sessions of these `port:user` accounts, as in
+    * `identities.json`.
+    */
+  private def linked(accounts: String*): Visibility =
+    Visibility.DirectWith(accounts.toSet.map: a =>
+      val i = a.indexOf(':')
+      PortId(a.take(i)) -> UserId(a.drop(i + 1)))
 
   private class Fixture(val provider: SqliteContextProvider):
     private val nextId = AtomicLong(0)
@@ -265,15 +273,15 @@ class SessionSearchSuite extends munit.FunSuite:
   ): f =>
     val alice = SessionScope.Direct(PortId("slack"), UserId("U_alice"))
     val (target, ids) = f.sessionIn(alice)("[u] the needle salary", "ok")
-    def direct(accounts: String*) =
-      SearchScope(SessionId.random(), WD, Visibility.DirectWith(accounts.toSet))
+    def as(accounts: String*) =
+      SearchScope(SessionId.random(), WD, linked(accounts*))
     assertFinds(
-      findsIn(f, direct("slack:U_alice", "cli:alice"), target, ids),
+      findsIn(f, as("slack:U_alice", "cli:alice"), target, ids),
       true
     )
-    assertFinds(findsIn(f, direct("cli:alice"), target, ids), false)
-    assertFinds(findsIn(f, direct("slack:U_bob"), target, ids), false)
-    assertFinds(findsIn(f, direct(), target, ids), false)
+    assertFinds(findsIn(f, as("cli:alice"), target, ids), false)
+    assertFinds(findsIn(f, as("slack:U_bob"), target, ids), false)
+    assertFinds(findsIn(f, as(), target, ids), false)
     val channel = SearchScope(
       SessionId.random(),
       WD,
@@ -295,7 +303,7 @@ class SessionSearchSuite extends munit.FunSuite:
     val direct = SearchScope(
       SessionId.random(),
       WD,
-      Visibility.DirectWith(Set("slack:C1", "slack:U_alice"))
+      linked("slack:C1", "slack:U_alice")
     )
     assertFinds(findsIn(f, direct, target, ids), false)
 
@@ -306,7 +314,7 @@ class SessionSearchSuite extends munit.FunSuite:
       SearchScope(
         SessionId.random(),
         "/other",
-        Visibility.DirectWith(Set("cli:me"))
+        linked("cli:me")
       )
     assertFinds(findsIn(f, there, target, ids), true)
 
@@ -347,3 +355,23 @@ class SessionSearchSuite extends munit.FunSuite:
       Some(SessionScope.Group(PortId("slack"), "C2"))
     )
     assertEquals(f.provider.adoptUnscopedCliSessions(Me), 0)
+
+  fixture.test(
+    "only a session's own person, or anyone for a new session, may attach"
+  ): f =>
+    val bob: SessionScope.Direct =
+      SessionScope.Direct(PortId("cli"), UserId("bob"))
+    val fresh = f.provider.createSession(WD)
+    val (own, _) = f.session("[u] mine")
+    val (channel, _) =
+      f.sessionIn(SessionScope.Group(PortId("slack"), "C1"))("[u] hi")
+    val handled = f.provider.resolveOrCreateHandle(
+      WD,
+      SessionHandle(PortId("slack"), "C2/1")
+    )
+    assert(f.provider.canAttach(fresh, Me))
+    assert(f.provider.canAttach(own, Me))
+    assert(!f.provider.canAttach(own, bob))
+    assert(!f.provider.canAttach(channel, Me))
+    assert(!f.provider.canAttach(handled, Me))
+    assert(!f.provider.canAttach(SessionId.random(), Me))

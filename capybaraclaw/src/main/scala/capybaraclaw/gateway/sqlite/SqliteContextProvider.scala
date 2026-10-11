@@ -207,6 +207,20 @@ class SqliteContextProvider(
                 Some(SessionScope.Group(PortId(p), v))
               case _ => None
 
+  def canAttach(sessionId: SessionId, scope: SessionScope.Direct): Boolean =
+    val sql =
+      """SELECT 1 FROM sessions s
+        |WHERE s.id = ?
+        |  AND ((s.scope_kind = 'direct' AND s.scope_port = ? AND s.scope_value = ?)
+        |    OR (s.scope_kind IS NULL
+        |        AND NOT EXISTS (SELECT 1 FROM session_handles h WHERE h.session_id = s.id)))""".stripMargin
+    readers.withReader: reader =>
+      SqliteJdbc.withStatement(reader, sql): stmt =>
+        stmt.setString(1, sessionId)
+        stmt.setString(2, scope.port)
+        stmt.setString(3, scope.user)
+        SqliteJdbc.withResultSet(stmt.executeQuery())(_.next())
+
   /** Gives sessions recorded before scopes existed, and without a handle, to
     * `owner` as private ones: only the CLI starts sessions without a handle,
     * so they are the operator's. Sessions with a handle keep no scope.

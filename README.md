@@ -129,7 +129,8 @@ CLI, a Slack DM), the same person's other private conversations on any
 linked account; from a shared one, other conversations in the same channel.
 The first message of a session decides which it is. Sessions recorded
 before this rule existed are found by nobody, except CLI sessions, which go
-to the operator.
+to the operator. For the same reason `--resume` and `--continue` only pick
+up the CLI user's own sessions, never a Slack thread or DM.
 
 The terminal user who started capybara (`cli:$USER`) is the operator, who
 may be asked for anything whatever the file says. Without the file, nobody

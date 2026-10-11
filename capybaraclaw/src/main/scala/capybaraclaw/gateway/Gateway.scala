@@ -139,10 +139,13 @@ class Gateway(
         case None    =>
           val history = contextProvider.load(sessionId)
           val conversation = port.conversation(origin)
-          contextProvider.recordScope(
-            sessionId,
-            SessionScope.of(origin, conversation)
-          )
+          // Only a session's first message decides: a session recorded
+          // before scopes keeps none rather than taking whoever speaks next.
+          if history.isEmpty then
+            contextProvider.recordScope(
+              sessionId,
+              SessionScope.of(origin, conversation)
+            )
           val access = memory.access(port.id, origin.user, conversation)
           val claw =
             clawFactory(
@@ -227,6 +230,14 @@ class Gateway(
     origin.session match
       case SessionRef.Direct(sessionId) =>
         contextProvider.verifyAndTouchSession(sessionId, workDir) match
+          case Some(metadata)
+              if metadata.workdir == workDir && !contextProvider.canAttach(
+                sessionId,
+                SessionScope.Direct(origin.port, origin.user)
+              ) =>
+            throw IllegalArgumentException(
+              s"session $sessionId belongs to another conversation"
+            )
           case Some(metadata) if metadata.workdir == workDir =>
             sessionId
           case Some(metadata) =>
