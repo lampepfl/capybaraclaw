@@ -863,12 +863,14 @@ class GatewaySuite extends munit.FunSuite:
       // Unscoped too: a handle means the session came from a port.
       val unscoped = cp.resolveOrCreateHandle(workDir, handle("C2/1"))
       for target <- List(channel, unscoped) do
+        val before = cp.findSession(target).get.lastActivity
         cli.push(
           GatewayMessage(directOrigin(CliPort.Id, "operator", target), "x")
         )
         val error = cli.nextReply()
         assert(error.text.contains("another conversation"), error.text)
         assertEquals(cli.nextFinished(), target)
+        assertEquals(cp.findSession(target).get.lastActivity, before)
       cli.push(
         GatewayMessage(directOrigin(CliPort.Id, "operator", own), "mine")
       )

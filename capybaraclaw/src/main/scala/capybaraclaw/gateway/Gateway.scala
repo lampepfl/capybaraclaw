@@ -229,15 +229,18 @@ class Gateway(
   private def resolveSessionId(origin: Origin): SessionId =
     origin.session match
       case SessionRef.Direct(sessionId) =>
+        // Checked before the touch, so a refused attach leaves the session's
+        // last activity (and with it browse and --continue order) alone.
+        val refused = contextProvider.findSession(sessionId).isDefined &&
+          !contextProvider.canAttach(
+            sessionId,
+            SessionScope.Direct(origin.port, origin.user)
+          )
+        if refused then
+          throw IllegalArgumentException(
+            s"session $sessionId belongs to another conversation"
+          )
         contextProvider.verifyAndTouchSession(sessionId, workDir) match
-          case Some(metadata)
-              if metadata.workdir == workDir && !contextProvider.canAttach(
-                sessionId,
-                SessionScope.Direct(origin.port, origin.user)
-              ) =>
-            throw IllegalArgumentException(
-              s"session $sessionId belongs to another conversation"
-            )
           case Some(metadata) if metadata.workdir == workDir =>
             sessionId
           case Some(metadata) =>
