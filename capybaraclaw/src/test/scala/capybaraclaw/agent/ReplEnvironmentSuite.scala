@@ -201,6 +201,10 @@ class ReplEnvironmentSuite extends munit.FunSuite:
 
       val result = EvalScalaTool.evaluate(other.repl, sessionId, "1 + 1")
       assert(result.contains("2"), result)
+      // An ordinary failure elsewhere gets no stuck-REPL guidance.
+      val failed = EvalScalaTool.evaluate(other.repl, sessionId, "1 +")
+      assert(failed.contains("Execution failed"), failed)
+      assert(!failed.contains(EvalScalaTool.BlockedGuidance), failed)
 
       val refused = EvalScalaTool.evaluate(stuck.repl, sessionId, "1 + 1")
       assert(refused.contains(ManagedRepl.StillRunningMessage), refused)
