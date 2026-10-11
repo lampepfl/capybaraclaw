@@ -15,6 +15,16 @@ final class ReplEnvironment(
     permissionOracle: Option[String => String] = None,
     executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs
 ):
+  // Every stuck run keeps a whole compiler in memory, and capybaraclaw has no
+  // session cap, so past tacit's limit a new conversation is refused rather
+  // than risking the gateway running out of memory. The gateway shows the
+  // message to the user, and the next message tries again.
+  ManagedRepl.abandonedLimitReached.foreach: _ =>
+    throw IllegalStateException(
+      s"Capybara can't start a new conversation right now: ${ManagedRepl.abandonedExecutions} earlier code runs " +
+        "timed out and are still running in the background. Try again later, or ask the operator to restart capybara."
+    )
+
   val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
 
   private val context: TacitContext = TacitContext(

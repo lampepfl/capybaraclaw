@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: virtuslab/tacit
-          ref: d9412e2c272e9d8fe733c58b6709473a461a9001
+          ref: 6b88a9ea98fd10d5bbf26d20570a2c709005b299
           path: tacit
       - name: Publish tacit locally
         working-directory: tacit
