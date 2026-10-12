@@ -46,7 +46,8 @@ class SlackPortSuite extends munit.FunSuite:
     ).foreach: kind =>
       val bot = FakeSlackApi()
       val port = SlackPort(bot)
-      val origin = receive(bot, port, Message("U1", "hi", "1.0", None, kind))
+      val origin =
+        receive(bot, port, Message("U1", "<@UBOT> hi", "1.0", None, kind))
       assertEquals(port.conversation(origin), Conversation.Group("C1"))
 
   test("a channel never seen in a DM is shared"):
@@ -319,7 +320,13 @@ class SlackPortSuite extends munit.FunSuite:
     Async.blocking:
       val _ = port.start()
       bot.push(
-        Message("U1", "hi", "1.1", None, MessageOrigin.ChannelMessage("C123"))
+        Message(
+          "U1",
+          "<@UBOT> hi",
+          "1.1",
+          None,
+          MessageOrigin.ChannelMessage("C123")
+        )
       )
       val GatewayMessage(origin, _) =
         port.incoming.read().toOption.get: @unchecked
@@ -346,7 +353,7 @@ class SlackPortSuite extends munit.FunSuite:
       bot.push(
         Message(
           "U1",
-          "hi",
+          "<@UBOT> hi",
           "2.2",
           Some("1.1"),
           MessageOrigin.ChannelMessage("C123")
@@ -661,6 +668,126 @@ class SlackPortSuite extends munit.FunSuite:
       )
       port.shutdown()
 
+  // --- which messages capybara answers ---
+
+  /** The texts of `msgs` that reach the gateway, in order. */
+  private def answered(bot: FakeSlackApi, msgs: Message*): List[String] =
+    Async.blocking:
+      val port = SlackPort(bot)
+      port.start()
+      msgs.foreach(bot.push)
+      // A DM marks the end: every message before it has been decided.
+      bot.push(
+        Message("U9", "end", "99.0", None, MessageOrigin.DirectMessage("D9"))
+      )
+      val texts = Iterator
+        .continually(port.incoming.read().toOption.get)
+        .collect { case GatewayMessage(_, text) => text }
+        .takeWhile(_ != "end")
+        .toList
+      bot.shutdown()
+      texts
+
+  private def channel(
+      text: String,
+      ts: String,
+      thread: Option[String] = None,
+      user: String = "U1"
+  ) =
+    Message(user, text, ts, thread, MessageOrigin.ChannelMessage("C1"))
+
+  test("every DM is answered"):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        Message("U1", "hi", "1.0", None, MessageOrigin.DirectMessage("D1"))
+      ),
+      List("hi")
+    )
+
+  test(
+    "in a channel, only a top-level message mentioning capybara is answered"
+  ):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        channel("chatter", "1.0"),
+        channel("<@UBOT> what is the travel policy?", "2.0")
+      ),
+      List("@capybara what is the travel policy?")
+    )
+    assert(bot.rootLookups.isEmpty, "top-level messages need no lookup")
+
+  test("the thread under a mention is answered, other threads are not"):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        channel("<@UBOT> hi", "1.0"),
+        channel("and another thing", "1.1", Some("1.0")),
+        channel("unrelated reply", "2.1", Some("2.0"))
+      ),
+      List("@capybara hi", "and another thing")
+    )
+
+  test("a group DM needs a mention too"):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        Message("U1", "hi all", "1.0", None, MessageOrigin.GroupMessage("G1")),
+        Message(
+          "U1",
+          "<@UBOT> hi",
+          "2.0",
+          None,
+          MessageOrigin.GroupMessage("G1")
+        )
+      ),
+      List("@capybara hi")
+    )
+
+  test("a mention inside another thread takes capybara into it"):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        channel("<@UBOT> look at this", "2.1", Some("2.0")),
+        channel("thanks", "2.2", Some("2.0"))
+      ),
+      List("@capybara look at this", "thanks")
+    )
+
+  test("after a restart, a thread is recognised by its first message, once"):
+    val bot = FakeSlackApi(threadRoots =
+      Map("C1/1.0" -> "<@UBOT> hi", "C1/2.0" -> "chatter")
+    )
+    assertEquals(
+      answered(
+        bot,
+        channel("follow-up", "1.1", Some("1.0")),
+        channel("again", "1.2", Some("1.0")),
+        channel("reply", "2.1", Some("2.0")),
+        channel("reply again", "2.2", Some("2.0"))
+      ),
+      List("follow-up", "again")
+    )
+    assertEquals(bot.rootLookups.toList, List("C1/1.0", "C1/2.0"))
+
+  test("capybara's own messages are never answered"):
+    val bot = FakeSlackApi()
+    assertEquals(
+      answered(
+        bot,
+        channel("<@UBOT> hi", "1.0"),
+        channel("Here is the policy", "1.1", Some("1.0"), user = "UBOT"),
+        Message("UBOT", "hello", "3.0", None, MessageOrigin.DirectMessage("D1"))
+      ),
+      List("@capybara hi")
+    )
+
   test(
     "a private result is an ephemeral message in the thread, as escaped literal text"
   ):
@@ -717,8 +844,15 @@ private final case class Stopped(channel: String, ts: String)
 private final class FakeSlackApi(
     failAppend: Boolean = false,
     failStart: Boolean = false,
-    failSend: Boolean = false
+    failSend: Boolean = false,
+    /** First message of each thread, by `channel/threadTs`. */
+    threadRoots: Map[String, String] = Map.empty
 ) extends SlackApi:
+  val rootLookups: ListBuffer[String] = ListBuffer.empty
+  def botUserId: String = "UBOT"
+  def threadRootText(channel: String, threadTs: String): Option[String] =
+    rootLookups += s"$channel/$threadTs"
+    threadRoots.get(s"$channel/$threadTs")
   private val messages = UnboundedChannel[Message]()
   private val sentMessages = ListBuffer.empty[Sent]
   private val startedStreams = ListBuffer.empty[Started]
@@ -813,6 +947,8 @@ private final class FakeSlackApi(
     clicks.close()
 
 private final class FailingSlackApi extends SlackApi:
+  def botUserId: String = "UBOT"
+  def threadRootText(channel: String, threadTs: String): Option[String] = None
   private val messages = UnboundedChannel[Message]()
 
   def sendMessage(
