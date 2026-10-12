@@ -64,14 +64,15 @@ object SessionSearchTool:
 
   val name: String = "session_search"
   val description: String =
-    "Search your own past sessions (all projects) by full text. " +
+    "Search past sessions in this project by full text: in a private conversation, the same person's " +
+      "other private conversations; in a shared one, other conversations in the same channel. " +
       "Four modes, inferred from arguments: " +
       "set 'all_of'/'any_of'/'none_of' to find sessions matching terms (discover) — returns one result per " +
       s"session with fragments of about ${SessionSearch.FragmentRadius} characters around each «match» " +
       "and the ids, roles and lengths of the surrounding messages, never whole messages; " +
       "set 'message_ids' to fetch whole messages (get); " +
       "set 'session_id' + 'around_message_id' to page through a session's messages (scroll); " +
-      "pass no arguments to list your most recent sessions (browse). " +
+      "pass no arguments to list the most recent of those sessions (browse). " +
       "A fragment is only part of its message: fetch the whole message with 'message_ids' before relying on " +
       "what it says. The current session is always excluded. Terms are matched literally — you do NOT write " +
       "query syntax; combine them via the all_of (AND), any_of (OR) and none_of (NOT) lists."
@@ -79,10 +80,10 @@ object SessionSearchTool:
   def register(
       agent: Agent,
       search: SessionSearch,
-      currentSession: SessionId
+      scope: () => SearchScope
   ): Unit =
     agent.handle[Args](name, description): (args, _) =>
-      run(search, currentSession, args)
+      run(search, scope(), args)
 
   private val logger = LoggerFactory.getLogger(getClass)
 
@@ -109,7 +110,7 @@ object SessionSearchTool:
   /** Dispatch to the mode implied by the arguments and render the result JSON. */
   private[tools] def run(
       search: SessionSearch,
-      current: SessionId,
+      scope: SearchScope,
       args: Args
   ): String =
     val allOf = args.all_of.getOrElse(Nil)
@@ -135,17 +136,17 @@ object SessionSearchTool:
               err(s"unknown sort '$s'; use ${SearchSort.names}.")
             case parsed =>
               val sort = parsed.flatMap(_._2).getOrElse(SearchSort.Rank)
-              discover(search, current, args, sort)
-        else if hasGet then get(search, current, args.message_ids.get)
+              discover(search, scope, args, sort)
+        else if hasGet then get(search, scope, args.message_ids.get)
         else
           (args.session_id, args.around_message_id) match
             case (Some(sid), Some(mid)) =>
-              scroll(search, current, sid, mid, args)
+              scroll(search, scope, sid, mid, args)
             case (Some(_), None) =>
               err("session_id requires around_message_id to scroll.")
             case (None, Some(_)) =>
               err("around_message_id requires session_id to scroll.")
-            case (None, None) => browse(search, current, args)
+            case (None, None) => browse(search, scope, args)
       catch
         case NonFatal(e) =>
           logger.error("session_search failed", e)
@@ -155,7 +156,7 @@ object SessionSearchTool:
 
   private def discover(
       search: SessionSearch,
-      current: SessionId,
+      scope: SearchScope,
       args: Args,
       sort: SearchSort
   ): ujson.Obj =
@@ -172,7 +173,7 @@ object SessionSearchTool:
       offset = offset,
       window = clampWindow(args.window, 5, MaxDiscoverWindow),
       sort = sort,
-      excludeSession = Some(current)
+      scope = scope
     )
     val next = offset + found.hits.size
     val result = ujson.Obj(
@@ -194,7 +195,7 @@ object SessionSearchTool:
 
   private def get(
       search: SessionSearch,
-      current: SessionId,
+      scope: SearchScope,
       ids: List[Long]
   ): ujson.Obj =
     val distinct = ids.distinct
@@ -202,7 +203,7 @@ object SessionSearchTool:
     else if distinct.size > MaxGetIds then
       err(s"at most $MaxGetIds message_ids per call.")
     else
-      val found = search.get(distinct, Some(current))
+      val found = search.get(distinct, scope)
       val foundIds = found.map(_.message.id).toSet
       ujson.Obj(
         "success" -> true,
@@ -221,7 +222,7 @@ object SessionSearchTool:
 
   private def scroll(
       search: SessionSearch,
-      current: SessionId,
+      scope: SearchScope,
       sid: String,
       mid: Long,
       args: Args
@@ -234,11 +235,11 @@ object SessionSearchTool:
       case None                => err(s"invalid session id: $sid")
       case Some(_) if mid <= 0 =>
         err("around_message_id must be a positive message id.")
-      case Some(sessionId) if sessionId == current =>
+      case Some(sessionId) if sessionId == scope.current =>
         err("cannot scroll the current session; it is already in context.")
       case Some(sessionId) =>
         val window = clampWindow(args.window, 10, MaxScrollWindow)
-        search.scroll(sessionId, mid, window, fullText) match
+        search.scroll(sessionId, mid, window, fullText, scope) match
           case None    => err(s"no message $mid found in session $sid")
           case Some(w) =>
             extend(
@@ -256,13 +257,13 @@ object SessionSearchTool:
 
   private def browse(
       search: SessionSearch,
-      current: SessionId,
+      scope: SearchScope,
       args: Args
   ): ujson.Obj =
     val sessions = search.browse(
       limit = clamp(args.limit, 5, MaxBrowseLimit),
       offset = clampOffset(args.offset),
-      excludeSession = Some(current)
+      scope = scope
     )
     ujson.Obj(
       "success" -> true,

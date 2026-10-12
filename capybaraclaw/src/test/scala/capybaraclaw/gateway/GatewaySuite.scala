@@ -236,6 +236,8 @@ class FakeContextProvider(
       SessionId
     ]()
   private val appendLog = ConcurrentLinkedQueue[(SessionId, Message)]()
+  private val scopes =
+    scala.collection.concurrent.TrieMap[SessionId, SessionScope]()
   private val lock = new Object
   seeds.foreach { case (k, v) =>
     store.update(k, v)
@@ -297,6 +299,17 @@ class FakeContextProvider(
     appendLog.offer((sessionId, msg))
 
   def log: List[(SessionId, Message)] = appendLog.iterator.asScala.toList
+
+  def recordScope(sessionId: SessionId, scope: SessionScope): Unit =
+    val _ = scopes.putIfAbsent(sessionId, scope)
+
+  def scopeOf(sessionId: SessionId): Option[SessionScope] =
+    scopes.get(sessionId)
+
+  def canAttach(sessionId: SessionId, scope: SessionScope.Direct): Boolean =
+    scopes.get(sessionId) match
+      case Some(recorded) => recorded == scope
+      case None           => !handles.values.exists(_ == sessionId)
 
   private def metadata(
       sessionId: SessionId,
@@ -361,7 +374,10 @@ class GatewaySuite extends munit.FunSuite:
         ConcurrentLinkedQueue(),
       gatewayWorkDir: String = workDir,
       accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
-      approvals: ApprovalBroker = TestIdentities.broker()
+      approvals: ApprovalBroker = TestIdentities.broker(),
+      searchScopeSeen: ConcurrentLinkedQueue[() => SearchScope] =
+        ConcurrentLinkedQueue(),
+      identities: Identities = Identities.empty
   )(body: Async.Spawn ?=> Gateway => Unit): Unit =
     runGatewayWithResult(
       ports,
@@ -371,7 +387,9 @@ class GatewaySuite extends munit.FunSuite:
       historySeen,
       gatewayWorkDir,
       accessSeen,
-      approvals
+      approvals,
+      searchScopeSeen,
+      identities
     )(body)
 
   private def runGatewayWithResult[R](
@@ -382,23 +400,29 @@ class GatewaySuite extends munit.FunSuite:
       historySeen: ConcurrentLinkedQueue[List[Message]],
       gatewayWorkDir: String,
       accessSeen: ConcurrentLinkedQueue[MemoryAccess] = ConcurrentLinkedQueue(),
-      approvals: ApprovalBroker = TestIdentities.broker()
+      approvals: ApprovalBroker = TestIdentities.broker(),
+      searchScopeSeen: ConcurrentLinkedQueue[() => SearchScope] =
+        ConcurrentLinkedQueue(),
+      identities: Identities = Identities.empty
   )(body: Async.Spawn ?=> Gateway => R): R =
     val factory: (
         String,
         SessionId,
         List[Message],
         MemoryAccess,
-        String => String
+        String => String,
+        () => SearchScope
     ) => ClawAgent =
-      (wd, sid, hist, access, _) =>
+      (wd, sid, hist, access, _, searchScope) =>
         created.incrementAndGet()
         historySeen.offer(hist)
         accessSeen.offer(access)
+        searchScopeSeen.offer(searchScope)
         ClawAgent(
           wd,
           sid,
           SessionSearch.empty,
+          searchScope,
           initialMessages = hist,
           endpointOverride = Some(endpointFactory()),
           memory = access
@@ -410,7 +434,15 @@ class GatewaySuite extends munit.FunSuite:
 
     Async.blocking:
       val gateway =
-        Gateway(gatewayWorkDir, ports, cp, memory, factory, approvals)
+        Gateway(
+          gatewayWorkDir,
+          ports,
+          cp,
+          memory,
+          factory,
+          approvals,
+          () => identities
+        )
       val gwFut = Future(gateway.run())
       try body(gateway)
       finally
@@ -710,6 +742,147 @@ class GatewaySuite extends munit.FunSuite:
           .getPath
           .endsWith("persons/slack%3AU_alice"),
         access.scope("private").get.store.baseDir.getPath
+      )
+    }
+
+  test(
+    "a shared session is found from its channel, whoever sends the next message"
+  ):
+    val port = FakePort(SlackPort.Id, _ => Conversation.Group("C1"))
+    val cp = FakeContextProvider()
+    val searchScopeSeen = ConcurrentLinkedQueue[() => SearchScope]()
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory =
+        () => StubEndpoint(List(textResponse("hi"), textResponse("hey"))),
+      created = AtomicInteger(0),
+      searchScopeSeen = searchScopeSeen
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "C1/1"), "hi")
+      )
+      port.nextReply()
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_bob", "C1/1"), "hey")
+      )
+      port.nextReply()
+      val session = sid("C1/1")
+      assertEquals(
+        cp.scopeOf(session),
+        Some(SessionScope.Group(SlackPort.Id, "C1"))
+      )
+      assertEquals(
+        searchScopeSeen.asScala.toList.map(_()),
+        List(
+          SearchScope(
+            session,
+            workDir,
+            Visibility.InChannel(SlackPort.Id, "C1")
+          )
+        )
+      )
+    }
+
+  test("a direct session is found from every account linked to its starter"):
+    val port = FakePort(SlackPort.Id, _ => Conversation.Direct)
+    val cp = FakeContextProvider()
+    val searchScopeSeen = ConcurrentLinkedQueue[() => SearchScope]()
+    val identities = Identities.parse(
+      """{"people": {"alice": {"ids": ["slack:U_alice", "cli:alice"]}}}""",
+      "test identities"
+    )
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("hi"))),
+      created = AtomicInteger(0),
+      searchScopeSeen = searchScopeSeen,
+      identities = identities
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "D1/1"), "hi")
+      )
+      port.nextReply()
+      assertEquals(
+        cp.scopeOf(sid("D1/1")),
+        Some(SessionScope.Direct(SlackPort.Id, UserId("U_alice")))
+      )
+      assertEquals(
+        searchScopeSeen.asScala.toList.head().visibility,
+        Visibility.DirectWith(
+          Set(
+            SlackPort.Id -> UserId("U_alice"),
+            CliPort.Id -> UserId("alice")
+          )
+        )
+      )
+    }
+
+  test("a session recorded before scopes gets none from its next message"):
+    val session = sid("C1/1")
+    val cp = FakeContextProvider(Map(session -> List(Message.user("[u] old"))))
+    val port = FakePort(SlackPort.Id, _ => Conversation.Group("C1"))
+    val searchScopeSeen = ConcurrentLinkedQueue[() => SearchScope]()
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => StubEndpoint(List(textResponse("hi"))),
+      created = AtomicInteger(0),
+      searchScopeSeen = searchScopeSeen
+    ) { _ =>
+      port.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "C1/1"), "hi")
+      )
+      port.nextReply()
+      assertEquals(cp.scopeOf(session), None)
+      assertEquals(
+        searchScopeSeen.asScala.toList.head().visibility,
+        Visibility.NoSessions
+      )
+    }
+
+  test("a session id is refused to anyone but the session's own person"):
+    val cp = FakeContextProvider()
+    val slack = FakePort(SlackPort.Id, _ => Conversation.Group("C1"))
+    val cli = FakePort(CliPort.Id, _ => Conversation.Direct)
+    val created = AtomicInteger(0)
+    val own = cp.createSession(workDir)
+    runGateway(
+      List(slack, cli),
+      cp,
+      // Each runner gets its own endpoint.
+      endpointFactory = () => StubEndpoint(List(textResponse("ok"))),
+      created = created
+    ) { _ =>
+      slack.push(
+        GatewayMessage(externalOrigin(SlackPort.Id, "U_alice", "C1/1"), "hi")
+      )
+      slack.nextReply()
+      val channel = sid("C1/1")
+      // Unscoped too: a handle means the session came from a port.
+      val unscoped = cp.resolveOrCreateHandle(workDir, handle("C2/1"))
+      for target <- List(channel, unscoped) do
+        val before = cp.findSession(target).get.lastActivity
+        cli.push(
+          GatewayMessage(directOrigin(CliPort.Id, "operator", target), "x")
+        )
+        val error = cli.nextReply()
+        assert(error.text.contains("another conversation"), error.text)
+        assertEquals(cli.nextFinished(), target)
+        assertEquals(cp.findSession(target).get.lastActivity, before)
+      cli.push(
+        GatewayMessage(directOrigin(CliPort.Id, "operator", own), "mine")
+      )
+      assertEquals(cli.nextReply().text, "ok")
+      cli.push(
+        GatewayMessage(directOrigin(CliPort.Id, "intruder", own), "x")
+      )
+      assert(cli.nextReply().text.contains("another conversation"))
+      assertEquals(created.get, 2)
+      assertEquals(
+        cp.scopeOf(own),
+        Some(SessionScope.Direct(CliPort.Id, UserId("operator")))
       )
     }
 

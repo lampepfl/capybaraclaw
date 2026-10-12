@@ -11,13 +11,14 @@ import capybaraclaw.agent.tools.{
   SessionSearchTool,
   ShowInterfaceTool
 }
-import capybaraclaw.gateway.{SessionId, SessionSearch}
+import capybaraclaw.gateway.{SearchScope, SessionId, SessionSearch}
 
 /** Agent class for Claw. */
 class ClawAgent(
     val workDir: String,
     sessionId: SessionId,
     sessionSearch: SessionSearch,
+    searchScope: () => SearchScope,
     initialMessages: List[Message] = Nil,
     endpointOverride: Option[Endpoint] = None,
     memory: MemoryAccess,
@@ -48,7 +49,7 @@ class ClawAgent(
 
     EvalScalaTool.register(a, replEnv.repl, sessionId)
     MemoryTool.register(a, memory)
-    SessionSearchTool.register(a, sessionSearch, sessionId)
+    SessionSearchTool.register(a, sessionSearch, searchScope)
     ShowInterfaceTool.register(a, apiReference)
 
     // Seed with any persisted prior transcript so rehydrated conversations continue

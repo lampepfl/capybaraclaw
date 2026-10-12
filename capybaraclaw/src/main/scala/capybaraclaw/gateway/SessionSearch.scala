@@ -28,6 +28,44 @@ final case class SearchTerms(
     prefix: Boolean = false
 )
 
+/** Who may find a session through session search, decided by its first
+  * message like its memory (see [[Conversation]]).
+  */
+enum SessionScope:
+  /** A private conversation, found only by the person who had it, from any
+    * account linked to them.
+    */
+  case Direct(port: PortId, user: UserId)
+
+  /** A shared conversation, found only from the same channel. */
+  case Group(port: PortId, channel: String)
+
+object SessionScope:
+  def of(origin: Origin, conversation: Conversation): SessionScope =
+    conversation match
+      case Conversation.Direct         => Direct(origin.port, origin.user)
+      case Conversation.Group(channel) => Group(origin.port, channel)
+
+/** Which sessions a search may see. */
+enum Visibility:
+  /** Direct sessions started from one of these accounts. */
+  case DirectWith(accounts: Set[(PortId, UserId)])
+
+  /** Group sessions in this channel. */
+  case InChannel(port: PortId, channel: String)
+
+  /** None, e.g. for a session whose scope was never recorded. */
+  case NoSessions
+
+/** What the session `current` may find: other sessions in its workdir that
+  * `visibility` admits. Anything else looks as if it did not exist.
+  */
+final case class SearchScope(
+    current: SessionId,
+    workdir: String,
+    visibility: Visibility
+)
+
 /** A message without its text; `length` counts characters. */
 final case class MessageMeta(
     id: Long,
@@ -108,25 +146,27 @@ trait SessionSearch:
       offset: Int,
       window: Int,
       sort: SearchSort,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): Discovery
 
+  /** `None` also when `sessionId` is outside `scope`. */
   def scroll(
       sessionId: SessionId,
       aroundMessageId: Long,
       window: Int,
-      fullText: Boolean
+      fullText: Boolean,
+      scope: SearchScope
   ): Option[SessionWindow]
 
-  /** The messages with these ids, whole, in id order; ids not found or in
-    * `excludeSession` are left out.
+  /** The messages with these ids, whole, in id order; ids not found or
+    * outside `scope` are left out.
     */
-  def get(ids: List[Long], excludeSession: Option[SessionId]): List[FullMessage]
+  def get(ids: List[Long], scope: SearchScope): List[FullMessage]
 
   def browse(
       limit: Int,
       offset: Int,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): List[SessionSummary]
 
 object SessionSearch:
@@ -147,8 +187,14 @@ object SessionSearch:
         o: Int,
         w: Int,
         s: SearchSort,
-        ex: Option[SessionId]
+        scope: SearchScope
     ) = Discovery(0, Nil)
-    def scroll(id: SessionId, around: Long, w: Int, full: Boolean) = None
-    def get(ids: List[Long], ex: Option[SessionId]) = Nil
-    def browse(l: Int, o: Int, ex: Option[SessionId]) = Nil
+    def scroll(
+        id: SessionId,
+        around: Long,
+        w: Int,
+        full: Boolean,
+        scope: SearchScope
+    ) = None
+    def get(ids: List[Long], scope: SearchScope) = Nil
+    def browse(l: Int, o: Int, scope: SearchScope) = Nil

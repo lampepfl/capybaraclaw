@@ -15,6 +15,38 @@ private[sqlite] object SessionSearchQueries:
     case SearchSort.Newest => "r.newest_id DESC"
     case SearchSort.Oldest => "r.oldest_id ASC"
 
+  /** A condition on `sessions s` admitting only what `scope` may see, and its
+    * parameters.
+    */
+  private def visible(scope: SearchScope): (String, List[String]) =
+    val (admitted, params) = scope.visibility match
+      case Visibility.DirectWith(accounts) if accounts.nonEmpty =>
+        val pairs = accounts.toList.map((p, u) => (p: String, u: String)).sorted
+        val rows = pairs.map(_ => "(?, ?)").mkString(", ")
+        // Row values, so the lookup uses the whole of sessions_scope_idx.
+        (
+          s"s.scope_kind = 'direct' AND (s.scope_port, s.scope_value) IN (VALUES $rows)",
+          pairs.flatMap((p, u) => List(p, u))
+        )
+      case Visibility.InChannel(port, channel) =>
+        (
+          "s.scope_kind = 'group' AND s.scope_port = ? AND s.scope_value = ?",
+          List(port, channel)
+        )
+      case _ => ("0", Nil)
+    (
+      s"s.workdir = ? AND s.id != ? AND $admitted",
+      scope.workdir :: scope.current :: params
+    )
+
+  private def bind(stmt: java.sql.PreparedStatement, params: List[Any]): Unit =
+    params.zipWithIndex.foreach:
+      case (p: String, i) => stmt.setString(i + 1, p)
+      case (p: Int, i)    => stmt.setInt(i + 1, p)
+      case (p: Long, i)   => stmt.setLong(i + 1, p)
+      case (p, _)         =>
+        throw IllegalArgumentException(s"cannot bind ${p.getClass}")
+
   def discover(
       conn: Connection,
       matchExpr: String,
@@ -22,17 +54,17 @@ private[sqlite] object SessionSearchQueries:
       offset: Int,
       window: Int,
       sort: SearchSort,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): Discovery =
-    val excluded = excludeSession.map(_.toString).getOrElse("")
+    val (admitted, params) = visible(scope)
     val countSql =
-      """SELECT COUNT(DISTINCT m.session_id)
-        |FROM messages_fts
-        |JOIN messages m ON m.id = messages_fts.rowid
-        |WHERE messages_fts MATCH ? AND m.session_id != ?""".stripMargin
+      s"""SELECT COUNT(DISTINCT m.session_id)
+         |FROM messages_fts
+         |JOIN messages m ON m.id = messages_fts.rowid
+         |JOIN sessions s ON s.id = m.session_id
+         |WHERE messages_fts MATCH ? AND $admitted""".stripMargin
     val total = SqliteJdbc.withStatement(conn, countSql): stmt =>
-      stmt.setString(1, matchExpr)
-      stmt.setString(2, excluded)
+      bind(stmt, matchExpr :: params)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         if rs.next() then rs.getInt(1) else 0
     val sql =
@@ -40,7 +72,8 @@ private[sqlite] object SessionSearchQueries:
          |  SELECT m.id AS msg_id, m.session_id, bm25(messages_fts) AS rank
          |  FROM messages_fts
          |  JOIN messages m ON m.id = messages_fts.rowid
-         |  WHERE messages_fts MATCH ? AND m.session_id != ?
+         |  JOIN sessions s ON s.id = m.session_id
+         |  WHERE messages_fts MATCH ? AND $admitted
          |),
          |ranked AS (
          |  SELECT msg_id, session_id, rank,
@@ -63,10 +96,7 @@ private[sqlite] object SessionSearchQueries:
          |ORDER BY ${orderClause(sort)}
          |LIMIT ? OFFSET ?""".stripMargin
     val anchors = SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, matchExpr)
-      stmt.setString(2, excluded)
-      stmt.setInt(3, limit)
-      stmt.setInt(4, offset)
+      bind(stmt, (matchExpr :: params) ++ List(limit, offset))
       SqliteJdbc.withResultSet(stmt.executeQuery())(readAnchors)
     val hits = anchors.map: a =>
       SessionHit(
@@ -82,11 +112,12 @@ private[sqlite] object SessionSearchQueries:
       sessionId: SessionId,
       aroundMessageId: Long,
       window: Int,
-      fullText: Boolean
+      fullText: Boolean,
+      scope: SearchScope
   ): Option[SessionWindow] =
     // Require both the session and the anchor message to exist, so a caller
     // cannot page an arbitrary id that yields a window with no real anchor.
-    sessionInfo(conn, sessionId)
+    sessionInfo(conn, sessionId, scope)
       .filter(_ => messageExists(conn, sessionId, aroundMessageId))
       .map: info =>
         val messages =
@@ -98,21 +129,20 @@ private[sqlite] object SessionSearchQueries:
   def get(
       conn: Connection,
       ids: List[Long],
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): List[FullMessage] =
     if ids.isEmpty then Nil
     else
+      val (admitted, params) = visible(scope)
       val sql =
-        s"""SELECT id, session_id, role, created_at, text FROM messages
-           |WHERE id IN (${ids.map(_ => "?").mkString(", ")})
-           |  AND session_id != ?
-           |ORDER BY id ASC""".stripMargin
+        s"""SELECT m.id, m.session_id, m.role, m.created_at, m.text
+           |FROM messages m
+           |JOIN sessions s ON s.id = m.session_id
+           |WHERE m.id IN (${ids.map(_ => "?").mkString(", ")})
+           |  AND $admitted
+           |ORDER BY m.id ASC""".stripMargin
       SqliteJdbc.withStatement(conn, sql): stmt =>
-        ids.zipWithIndex.foreach((id, i) => stmt.setLong(i + 1, id))
-        stmt.setString(
-          ids.size + 1,
-          excludeSession.map(_.toString).getOrElse("")
-        )
+        bind(stmt, ids ++ params)
         SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
           rows(rs): rs =>
             val text = rs.getString("text")
@@ -126,22 +156,21 @@ private[sqlite] object SessionSearchQueries:
       conn: Connection,
       limit: Int,
       offset: Int,
-      excludeSession: Option[SessionId]
+      scope: SearchScope
   ): List[SessionSummary] =
+    val (admitted, params) = visible(scope)
     val sql =
-      """SELECT s.id, s.workdir, s.created_at, s.last_activity,
-        |       (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
-        |       (SELECT text FROM messages m
-        |        WHERE m.session_id = s.id AND m.role = 'user'
-        |        ORDER BY id ASC LIMIT 1) AS title
-        |FROM sessions s
-        |WHERE s.id != ?
-        |ORDER BY s.last_activity DESC
-        |LIMIT ? OFFSET ?""".stripMargin
+      s"""SELECT s.id, s.workdir, s.created_at, s.last_activity,
+         |       (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
+         |       (SELECT text FROM messages m
+         |        WHERE m.session_id = s.id AND m.role = 'user'
+         |        ORDER BY id ASC LIMIT 1) AS title
+         |FROM sessions s
+         |WHERE $admitted
+         |ORDER BY s.last_activity DESC
+         |LIMIT ? OFFSET ?""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, excludeSession.map(_.toString).getOrElse(""))
-      stmt.setInt(2, limit)
-      stmt.setInt(3, offset)
+      bind(stmt, params ++ List(limit, offset))
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         rows(rs): rs =>
           SessionSummary(
@@ -234,16 +263,18 @@ private[sqlite] object SessionSearchQueries:
 
   private def sessionInfo(
       conn: Connection,
-      sessionId: SessionId
+      sessionId: SessionId,
+      scope: SearchScope
   ): Option[SessionInfo] =
+    val (admitted, params) = visible(scope)
     val sql =
-      """SELECT s.workdir, s.created_at, s.last_activity,
-        |       (SELECT text FROM messages m
-        |        WHERE m.session_id = s.id AND m.role = 'user'
-        |        ORDER BY id ASC LIMIT 1) AS title
-        |FROM sessions s WHERE s.id = ?""".stripMargin
+      s"""SELECT s.workdir, s.created_at, s.last_activity,
+         |       (SELECT text FROM messages m
+         |        WHERE m.session_id = s.id AND m.role = 'user'
+         |        ORDER BY id ASC LIMIT 1) AS title
+         |FROM sessions s WHERE s.id = ? AND $admitted""".stripMargin
     SqliteJdbc.withStatement(conn, sql): stmt =>
-      stmt.setString(1, sessionId)
+      bind(stmt, sessionId :: params)
       SqliteJdbc.withResultSet(stmt.executeQuery()): rs =>
         Option.when(rs.next())(info(rs, sessionId))
 

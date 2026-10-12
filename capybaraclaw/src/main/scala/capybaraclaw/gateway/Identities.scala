@@ -55,6 +55,21 @@ final class Identities private (
     val p = byId.getOrElse(id, Person(id, defaultRoles))
     if operator.contains(id) then p.copy(operator = true) else p
 
+  /** Every account of the person behind this one: those linked to it in the
+    * file, or just itself when it is not listed.
+    */
+  def accounts(port: PortId, user: UserId): Set[(PortId, UserId)] =
+    byId.get(s"$port:$user") match
+      case Some(p) =>
+        byId
+          .collect:
+            case (id, q) if q.id == p.id =>
+              // Ids are validated to have a non-empty port before the first ':'.
+              val i = id.indexOf(':')
+              PortId(id.take(i)) -> UserId(id.drop(i + 1))
+          .toSet
+      case None => Set(port -> user)
+
   /** The part of `permission` that `person`'s roles do not allow, if any. */
   def disallowed(person: Person, permission: Permission): Option[Permission] =
     if person.operator then None

@@ -11,7 +11,9 @@ import capybaraclaw.gateway.{
   IdentitiesFile,
   MemoryDirectory,
   SessionId,
-  SessionMetadata
+  SessionMetadata,
+  SessionScope,
+  UserId
 }
 import capybaraclaw.gateway.port.Port
 import capybaraclaw.gateway.port.cli.{CliPort, SessionFormatting}
@@ -89,6 +91,7 @@ private object ClawMain extends CaseApp[CliOptions]:
     Using
       .Manager: use =>
         val contextProvider = use(SqliteContextProvider())
+        contextProvider.adoptUnscopedCliSessions(cliScope)
         val (sessionId, workDirFile) =
           bootstrapSession(contextProvider, options, remainingArgs)
         val workDir = workDirFile.getPath
@@ -122,16 +125,18 @@ private object ClawMain extends CaseApp[CliOptions]:
             ports,
             contextProvider,
             memory,
-            clawFactory = (wd, sid, hist, access, oracle) =>
+            clawFactory = (wd, sid, hist, access, oracle, searchScope) =>
               ClawAgent(
                 wd,
                 sid,
                 contextProvider,
+                searchScope,
                 initialMessages = hist,
                 memory = access,
                 permissionOracle = Some(oracle)
               ),
-            approvals = ApprovalBroker(identities.current)
+            approvals = ApprovalBroker(identities.current),
+            identities = identities.current
           )
           println(s"Gateway ready. Ports: ${ports.map(_.id).mkString(", ")}.")
           slackPort.foreach(_.start())
@@ -176,16 +181,30 @@ private object ClawMain extends CaseApp[CliOptions]:
       case None =>
         System.err.println(s"[claw] session '$raw' not found")
         exit(1)
+      case Some(_) if !contextProvider.canAttach(sessionId, cliScope) =>
+        System.err.println(
+          s"[claw] session '$raw' is not a CLI session of $$USER and cannot be resumed here"
+        )
+        exit(1)
       case Some(meta) =>
         adoptStoredWorkdir(meta, raw, remainingArgs)
+
+  /** The CLI user's own sessions are the only ones it may resume: attaching
+    * to another person's or a channel's session would mix the operator's
+    * private memory and searches into it.
+    */
+  private def cliScope: SessionScope.Direct =
+    SessionScope.Direct(CliPort.Id, UserId(CliPort.defaultUser))
 
   private def resumeLatest(
       contextProvider: SqliteContextProvider,
       remainingArgs: RemainingArgs
   ): (SessionId, File) =
-    contextProvider.listSessions().headOption match
+    contextProvider
+      .listSessions()
+      .find(m => contextProvider.canAttach(m.id, cliScope)) match
       case None =>
-        System.err.println("[claw] no sessions recorded")
+        System.err.println("[claw] no CLI sessions recorded")
         exit(1)
       case Some(meta) =>
         adoptStoredWorkdir(meta, meta.id.toString, remainingArgs)

@@ -45,9 +45,11 @@ class Gateway(
         SessionId,
         List[tacit.agents.llm.endpoint.Message],
         MemoryAccess,
-        String => String
+        String => String,
+        () => SearchScope
     ) => ClawAgent,
-    approvals: ApprovalBroker = ApprovalBroker(() => Identities.empty)
+    approvals: ApprovalBroker = ApprovalBroker(() => Identities.empty),
+    identities: () => Identities = () => Identities.empty
 ):
   private val logger = LoggerFactory.getLogger(classOf[Gateway])
   private val portsById: Map[PortId, Port] = ports.map(p => p.id -> p).toMap
@@ -121,7 +123,8 @@ class Gateway(
 
   /** The first message of a session decides its memory for the session's
     * lifetime: the port says whether the conversation is private, and the
-    * origin who started it.
+    * origin who started it. It also decides, for good, who may find the
+    * session through session search.
     */
   private def getOrCreateRunner(
       sessionId: SessionId,
@@ -135,21 +138,42 @@ class Gateway(
         case Some(r) => r
         case None    =>
           val history = contextProvider.load(sessionId)
-          val access =
-            memory.access(port.id, origin.user, port.conversation(origin))
+          val conversation = port.conversation(origin)
+          // Only a session's first message decides: a session recorded
+          // before scopes keeps none rather than taking whoever speaks next.
+          if history.isEmpty then
+            contextProvider.recordScope(
+              sessionId,
+              SessionScope.of(origin, conversation)
+            )
+          val access = memory.access(port.id, origin.user, conversation)
           val claw =
             clawFactory(
               workDir,
               sessionId,
               history,
               access,
-              approvals.oracle(sessionId)
+              approvals.oracle(sessionId),
+              () => searchScope(sessionId)
             )
           val runner =
             AgentRunner(sessionId, claw, contextProvider, approvals)
           runner.start()
           runners.update(sessionId, runner)
           runner
+
+  /** What the session may find through session search: sessions in this
+    * workdir with the same scope, private ones by any account linked to their
+    * owner as `identities.json` says now.
+    */
+  private def searchScope(sessionId: SessionId): SearchScope =
+    val visibility = contextProvider.scopeOf(sessionId) match
+      case Some(SessionScope.Direct(port, user)) =>
+        Visibility.DirectWith(identities().accounts(port, user))
+      case Some(SessionScope.Group(port, channel)) =>
+        Visibility.InChannel(port, channel)
+      case None => Visibility.NoSessions
+    SearchScope(sessionId, workDir, visibility)
 
   /** Records the decision, lets the port close its prompt, and tells the
     * agent, so it retries (or gives up) without the user having to ask.
@@ -205,6 +229,17 @@ class Gateway(
   private def resolveSessionId(origin: Origin): SessionId =
     origin.session match
       case SessionRef.Direct(sessionId) =>
+        // Checked before the touch, so a refused attach leaves the session's
+        // last activity (and with it browse and --continue order) alone.
+        val refused = contextProvider.findSession(sessionId).isDefined &&
+          !contextProvider.canAttach(
+            sessionId,
+            SessionScope.Direct(origin.port, origin.user)
+          )
+        if refused then
+          throw IllegalArgumentException(
+            s"session $sessionId belongs to another conversation"
+          )
         contextProvider.verifyAndTouchSession(sessionId, workDir) match
           case Some(metadata) if metadata.workdir == workDir =>
             sessionId
