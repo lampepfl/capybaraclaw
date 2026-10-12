@@ -1,5 +1,7 @@
 <configuration>
-  <property name="claw.logdir" value="${user.home}/.claw/logs"/>
+  <!-- claw.home is set by main from CAPYBARACLAW_HOME_DIR (see ClawHome);
+       the fallbacks cover loggers created before that. -->
+  <property name="claw.logdir" value="${claw.home:-${CAPYBARACLAW_HOME_DIR:-${user.home}/.claw}}/logs"/>
 
   <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
     <file>${claw.logdir}/capybara.log</file>

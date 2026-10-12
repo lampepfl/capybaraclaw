@@ -105,10 +105,10 @@ object MemoryDirectory:
 
   private val LegacyNames = List("MEMORY.md", "USER.md")
 
-  /** `~/.claw/memories/`. */
+  /** `~/.claw/memories/` (see [[capybaraclaw.util.ClawHome]]). */
   def default(identities: () => Identities): MemoryDirectory =
     MemoryDirectory(
-      File(System.getProperty("user.home"), ".claw/memories"),
+      capybaraclaw.util.ClawHome.dir.resolve("memories").toFile,
       identities
     )
 

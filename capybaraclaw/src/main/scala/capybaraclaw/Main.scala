@@ -37,6 +37,7 @@ import scala.util.control.NonFatal
   * An optional positional argument sets the working directory (defaults to `.`).
   */
 @main def main(args: String*): Unit =
+  capybaraclaw.util.ClawHome.publish()
   try ClawMain.main(args.toArray)
   catch
     case ClawCaseAppExit(0) =>
@@ -280,7 +281,7 @@ private def printStartupInfo(
   val clawJsonExists = File(workDir, "claw.json").exists()
   val clawMdExists = File(workDir, "CLAW.md").exists()
   val logFile =
-    File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
+    capybaraclaw.util.ClawHome.dir.resolve("logs/capybara.log").toString
   println("Capybara Claw Gateway")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")

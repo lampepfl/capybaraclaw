@@ -94,7 +94,7 @@ object Identities:
   private val PersonKeys = List("ids", "roles")
 
   def defaultFile: File =
-    File(System.getProperty("user.home"), ".claw/identities.json")
+    capybaraclaw.util.ClawHome.dir.resolve("identities.json").toFile
 
   /** Nobody linked if `file` does not exist. Raises [[ConfigError]] naming the
     * file and the offending entry.

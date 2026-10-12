@@ -33,6 +33,13 @@ the key. The agent can read the file but never change it.
 | `classified_paths` | `[]` | Extra paths whose content the agent only gets as `Classified`, on top of TACIT's defaults (`.ssh`, `.env`, …). |
 | `execution_timeout_ms` | `120000` | Time limit for one `evaluate_scala` call. A runaway loop in agent code is stopped when it runs out, and a long `exec` or LLM call is interrupted, so raise it for long builds. |
 
+### Capybara's own state: `~/.claw`
+
+Transcripts (`state.db`), `identities.json`, memories and logs live in
+`~/.claw`. Set `CAPYBARACLAW_HOME_DIR` to keep them elsewhere, e.g. one
+directory per demo or deployment; a leading `~` is your home and a relative
+path is taken from the current directory.
+
 ## Connecting to Slack
 
 Pass `--enable-slack`; capybara then also needs `SLACK_BOT_TOKEN` (`xoxb-…`)

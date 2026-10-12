@@ -450,6 +450,5 @@ class SqliteContextProvider(
           conn.setAutoCommit(previousAutoCommit)
 
 object SqliteContextProvider:
-  /** `~/.claw` */
-  def defaultBaseDir: Path =
-    Paths.get(System.getProperty("user.home"), ".claw")
+  /** `~/.claw` (see [[capybaraclaw.util.ClawHome]]). */
+  def defaultBaseDir: Path = capybaraclaw.util.ClawHome.dir
