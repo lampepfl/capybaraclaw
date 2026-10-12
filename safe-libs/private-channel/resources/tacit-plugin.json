@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "claw.private-channel",
+  "name": "Private channel",
+  "version": "0.1.0",
+  "apiMode": "extend-core",
+  "domain": "Delivering confidential results",
+  "description": "Hands Classified data to a private LLM and/or posts it to one private Slack channel chosen by the operator. The agent only learns that the result was delivered."
+}

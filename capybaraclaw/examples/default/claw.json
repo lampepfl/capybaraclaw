@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "model": "minimax/minimax-m2.7:nitro",
+  "model": "anthropic/claude-haiku-5.5",
   "max_tokens": 16000,
-  "classified_paths": ["$workdir/emails/"]
+  "classified_paths": ["$workdir/emails/", "$workdir/payroll.xlsx"]
 }

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "claw.sheets",
+  "name": "Confidential sheets",
+  "version": "0.1.0",
+  "apiMode": "extend-core",
+  "domain": "Spreadsheets with confidential columns",
+  "description": "Loads .xlsx files through the agent's FileSystem. Columns whose header starts with * are confidential: their values only leave the table inside Classified aggregates."
+}
