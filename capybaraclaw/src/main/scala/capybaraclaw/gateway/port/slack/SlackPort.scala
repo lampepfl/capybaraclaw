@@ -72,14 +72,68 @@ class SlackPort(bot: SlackApi) extends Port:
     var running = true
     while running do
       bot.messageChannel.read() match
-        case Right(slackMsg) =>
+        case Right(slackMsg) if addressed(slackMsg) =>
           val origin = toOrigin(slackMsg)
           val handle = getSlackHandle(origin)
           logIncomingMessage(handle, origin.user, slackMsg.text)
           lastMessageTs.updateAndGet(_.updated(handle.value, slackMsg.ts))
-          outCh.sendImmediately(GatewayMessage(origin, slackMsg.text))
+          outCh.sendImmediately(GatewayMessage(origin, readable(slackMsg.text)))
+        case Right(slackMsg) =>
+          logger.debug(
+            "[slack <-] ignoring a message not addressed to capybara in {}",
+            slackMsg.origin.channelId
+          )
         case Left(_) =>
           running = false
+
+  /** Threads (`channel/rootTs`) capybara takes part in, and threads it was
+    * found not to, so that each is looked up at most once.
+    */
+  private val engaged = ConcurrentHashMap.newKeySet[String]().nn
+  private val notEngaged = ConcurrentHashMap.newKeySet[String]().nn
+
+  private def mention: String = s"<@${bot.botUserId}>"
+
+  /** Whether capybara should answer `msg`: every DM; in channels and group
+    * DMs, a message that @mentions it (which also takes it into that
+    * message's thread) and every later message in a thread it was taken into.
+    * Its own messages never.
+    */
+  private def addressed(msg: Message): Boolean =
+    if msg.userId == bot.botUserId then false
+    else
+      msg.origin match
+        case MessageOrigin.DirectMessage(_) => true
+        case origin                         =>
+          val root = msg.threadTs.getOrElse(msg.ts)
+          val thread = s"${origin.channelId}/$root"
+          if msg.text.contains(mention) then
+            engaged.add(thread)
+            notEngaged.remove(thread)
+            true
+          else if engaged.contains(thread) then true
+          else if msg.threadTs.forall(_ == msg.ts) || notEngaged.contains(
+              thread
+            )
+          then false
+          else
+            // A reply in a thread not seen since the gateway started: it is
+            // ours if its first message mentioned capybara.
+            val ours =
+              try
+                bot
+                  .threadRootText(origin.channelId, root)
+                  .exists(_.contains(mention))
+              catch
+                case NonFatal(e) =>
+                  logger.warn(s"[slack] could not look up thread $thread", e)
+                  false
+            if ours then engaged.add(thread) else notEngaged.add(thread)
+            ours
+
+  /** The text with capybara's own mention made readable for the agent. */
+  private def readable(text: String): String =
+    text.replace(mention, "@capybara").trim
 
   override def validateOriginForReply(origin: Origin): Unit =
     val _ = decodeHandle(getSlackHandle(origin))

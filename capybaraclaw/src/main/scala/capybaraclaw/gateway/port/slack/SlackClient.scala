@@ -20,7 +20,8 @@ import com.slack.api.model.block.element.BlockElements
 import capybaraclaw.gateway.ApprovalDecision
 import com.slack.api.methods.request.conversations.{
   ConversationsHistoryRequest,
-  ConversationsInfoRequest
+  ConversationsInfoRequest,
+  ConversationsRepliesRequest
 }
 import com.slack.api.methods.request.auth.AuthTestRequest
 import com.slack.api.methods.request.users.UsersInfoRequest
@@ -120,10 +121,32 @@ class SlackClient(botToken: String, appToken: String):
   private val channelCache = mutable.Map[String, Channel]()
   private val userCache = mutable.Map[String, User]()
 
-  private lazy val teamId: String =
+  private lazy val identity: (String, String) =
     val response = methods.authTest(AuthTestRequest.builder().build())
     ensureOk(response)
-    response.getTeamId.nn
+    (response.getTeamId.nn, response.getUserId.nn)
+
+  private def teamId: String = identity._1
+
+  /** The bot's own user id. */
+  def botUserId: String = identity._2
+
+  /** The first message of a thread (`conversations.replies` with the
+    * thread's ts returns it first).
+    */
+  def threadRootText(channel: String, threadTs: String): Option[String] =
+    val response = methods.conversationsReplies(
+      ConversationsRepliesRequest
+        .builder()
+        .channel(channel)
+        .ts(threadTs)
+        .limit(1)
+        .build()
+    )
+    ensureOk(response, "conversations.replies")
+    Option(response.getMessages)
+      .flatMap(_.asScala.headOption)
+      .flatMap(m => Option(m.getText))
 
   /** Resolve a channel by ID (cached). */
   def getChannel(id: String): Channel =

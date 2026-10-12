@@ -30,6 +30,11 @@ class SlackBot(botToken: String, appToken: String) extends SlackApi:
   def readHistory(channel: String, limit: Int = 32): List[Message] =
     client.readHistory(channel, limit)
 
+  def botUserId: String = client.botUserId
+
+  def threadRootText(channel: String, threadTs: String): Option[String] =
+    client.threadRootText(channel, threadTs)
+
   def getChannel(id: String): Channel = client.getChannel(id)
   def getUser(id: String): User = client.getUser(id)
 

@@ -62,6 +62,12 @@ trait SlackApi:
       text: String
   ): Unit
 
+  /** The bot's own Slack user id, as it appears in `<@...>` mentions. */
+  def botUserId: String
+
+  /** The text of the first message of thread `threadTs`, if Slack has it. */
+  def threadRootText(channel: String, threadTs: String): Option[String]
+
   def messageChannel: ReadableChannel[Message]
   def approvalClicks: ReadableChannel[ApprovalClick]
   def shutdown(): Unit
