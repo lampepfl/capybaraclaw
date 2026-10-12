@@ -57,7 +57,7 @@ object CliTransitions:
       )
 
   enum Role:
-    case User, Assistant, Error, Tool, Permission
+    case User, Assistant, Error, Tool, Permission, Private
 
   /** What the input reader does next, between turns. */
   enum InputRequest:
@@ -153,7 +153,7 @@ object CliTransitions:
           state,
           List(
             RenderAssistantComplete,
-            Render(Role.Permission, s"private result ($source):\n$text")
+            Render(Role.Private, s"($source)\n$text")
           )
         )
 

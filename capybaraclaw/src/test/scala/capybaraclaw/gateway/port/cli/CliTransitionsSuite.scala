@@ -48,7 +48,7 @@ class CliTransitionsSuite extends FunSuite:
       assertEquals(r.state, state)
       assert(
         r.effects.contains(
-          Render(Role.Permission, s"private result (acme.vault: hr):\n$text")
+          Render(Role.Private, s"(acme.vault: hr)\n$text")
         ),
         r.effects
       )
