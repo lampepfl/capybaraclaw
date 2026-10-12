@@ -37,8 +37,16 @@ the key. The agent can read the file but never change it.
 
 Transcripts (`state.db`), `identities.json`, memories and logs live in
 `~/.claw`. Set `CAPYBARACLAW_HOME_DIR` to keep them elsewhere, e.g. one
-directory per demo or deployment; a leading `~` is your home and a relative
-path is taken from the current directory.
+directory per demo or deployment: `~/…` is under your home and a relative
+path is taken from the current directory (`~` alone and `~user` are refused).
+
+The agent must never reach this directory: whoever can write
+`identities.json` gives themselves any role. So capybara refuses to start if
+it overlaps the workdir in either direction (symlinks resolved), which also
+means the workdir cannot be your home directory with the default `~/.claw`.
+Agent code sees it as read-only and classified wherever it is. A new state
+directory is created readable by you only; for an existing one that others
+can write or that someone else owns, capybara warns at startup.
 
 ## Connecting to Slack
 

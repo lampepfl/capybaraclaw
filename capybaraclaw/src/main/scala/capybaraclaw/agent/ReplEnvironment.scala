@@ -13,7 +13,11 @@ final class ReplEnvironment(
     workDir: String,
     classifiedPaths: List[String],
     permissionOracle: Option[String => String] = None,
-    executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs
+    executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs,
+    /** Capybara's state ([[capybaraclaw.util.ClawHome]]): read-only and
+      * classified wherever it is, should a granted root ever cover it.
+      */
+    stateDir: java.nio.file.Path = capybaraclaw.util.ClawHome.dir
 ):
   // Every stuck run keeps a whole compiler in memory, and capybaraclaw has no
   // session cap, so past tacit's limit a new conversation is refused rather
@@ -35,15 +39,15 @@ final class ReplEnvironment(
       // capybaraclaw logs what matters itself.
       quiet = true,
       libraryConfig = Json.obj(
-        "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
+        "readOnlyPaths" -> (ReplEnvironment.readOnlyPaths(workDir) :+ stateDir.toString).asJson,
         // Relative paths in agent code mean the workdir, wherever the
         // gateway was started from.
         "workingDir" -> java.io.File(workDir).getCanonicalPath.asJson,
         "allowedRoots" -> List(java.io.File(workDir).getCanonicalPath).asJson,
         "commandPermissions" -> List.empty[String].asJson,
         "networkPermissions" -> List.empty[String].asJson,
-        "classifiedPaths" -> ReplEnvironment
-          .classifiedPatterns(workDir, classifiedPaths)
+        "classifiedPaths" -> (ReplEnvironment
+          .classifiedPatterns(workDir, classifiedPaths) :+ s"$stateDir/")
           .asJson
       )
     ),
