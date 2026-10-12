@@ -148,6 +148,16 @@ class CliPort(
   ): Unit =
     offerEvent(ApprovalRequested(request))
 
+  // The terminal is the operator's alone.
+  override def supportsPrivateOutput: Boolean = true
+
+  override def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      text: String
+  ): Unit =
+    offerEvent(ToolCall("private result", text))
+
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 

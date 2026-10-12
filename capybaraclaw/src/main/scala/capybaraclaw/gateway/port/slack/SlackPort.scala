@@ -239,6 +239,19 @@ class SlackPort(bot: SlackApi) extends Port:
       )
     )
 
+  override def supportsPrivateOutput: Boolean = true
+
+  /** An ephemeral message: only `origin.user` sees it, in the conversation's
+    * thread, and it is not stored in the channel's history.
+    */
+  override def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      text: String
+  ): Unit =
+    val (channelId, threadTs) = decodeHandle(getSlackHandle(origin))
+    bot.postEphemeral(channelId, threadTs, origin.user, text)
+
   @tailrec
   private def clickLoop()(using Async): Unit =
     bot.approvalClicks.read() match
