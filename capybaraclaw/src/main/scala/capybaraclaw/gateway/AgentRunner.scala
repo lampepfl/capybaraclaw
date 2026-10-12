@@ -51,6 +51,20 @@ class AgentRunner(
     */
   private val held = mutable.ArrayDeque[RoutedGatewayMessage]()
 
+  /** Steers accepted during the current turn, by the text they were sent as,
+    * so that any the run did not get to can be held again. Only touched on
+    * the runner's fiber.
+    */
+  private val steered = mutable.ArrayDeque[(String, RoutedGatewayMessage)]()
+
+  /** Held messages already in the transcript (accepted as steers, then not
+    * consumed), which their own turn must not record again. Compared by
+    * identity. Only touched on the runner's fiber.
+    */
+  private val alreadyRecorded = java.util.Collections.newSetFromMap(
+    java.util.IdentityHashMap[RoutedGatewayMessage, java.lang.Boolean]()
+  )
+
   def deliver(routed: RoutedGatewayMessage): Unit =
     try inbox.sendImmediately(routed)
     catch case _: gears.async.ChannelClosedException => ()
@@ -70,9 +84,11 @@ class AgentRunner(
       case Right(routed) =>
         val msg = routed.message
         val replyPort = routed.replyPort
+        val recorded = alreadyRecorded.remove(routed)
+        steered.clear()
         val replyStream = replyPort.openReply(sessionId, msg.origin)
         approvals.beginTurn(sessionId, replyPort, msg.origin)
-        try processTurn(msg, replyPort, replyStream)
+        try processTurn(msg, replyPort, replyStream, recorded)
         catch
           case NonFatal(e) =>
             logger.error(s"[runner $sessionId] turn failed", e)
@@ -94,10 +110,11 @@ class AgentRunner(
   private def processTurn(
       msg: GatewayMessage,
       replyPort: Port,
-      replyStream: ReplyStream
+      replyStream: ReplyStream,
+      recorded: Boolean
   )(using Async.Spawn): Unit =
     val tagged = tag(msg)
-    contextProvider.append(sessionId, Message.user(tagged))
+    if !recorded then contextProvider.append(sessionId, Message.user(tagged))
 
     val run: AgentRun = claw.streamAsk(tagged)
 
@@ -129,6 +146,9 @@ class AgentRunner(
             case NonFatal(e) =>
               logger.error(s"[runner $sessionId] sendToolCall failed", e)
           drainSteers(run, msg.origin)
+          consume(reply, finalText, toolInputs, aborted)
+        case Emitted(Unconsumed(texts)) =>
+          holdUnconsumed(texts)
           consume(reply, finalText, toolInputs, aborted)
         case Emitted(_) =>
           drainSteers(run, msg.origin)
@@ -191,7 +211,7 @@ class AgentRunner(
           val t = tag(held(i).message)
           run.steer(t) match
             case tacit.agents.llm.agentic.SteerOutcome.Accepted =>
-              val _ = held.remove(i)
+              steered.append(t -> held.remove(i))
               try contextProvider.append(sessionId, Message.user(t))
               catch
                 case NonFatal(e) =>
@@ -205,6 +225,28 @@ class AgentRunner(
 
     pollInbox()
     steerNext()
+
+  /** Steers the run accepted but ended without reading: it only reads them
+    * after tool results, so one sent while the final answer is generated
+    * (e.g. "I approved #4, retry") would otherwise be lost. They go back to
+    * the front of the held messages, in order, and get a turn of their own;
+    * they are already in the transcript.
+    */
+  private def holdUnconsumed(texts: List[String]): Unit =
+    texts.reverse.foreach: text =>
+      steered.indexWhere(_._1 == text) match
+        case -1 =>
+          logger.warn(
+            s"[runner $sessionId] an unconsumed steer matches no message"
+          )
+        case i =>
+          val (_, routed) = steered.remove(i)
+          val _ = alreadyRecorded.add(routed)
+          held.prepend(routed)
+    if texts.nonEmpty then
+      logger.info(
+        s"[runner $sessionId] ${texts.size} message(s) arrived as the run ended; they get a turn of their own"
+      )
 
   private def sameSender(a: Origin, b: Origin): Boolean =
     a.port == b.port && a.user == b.user

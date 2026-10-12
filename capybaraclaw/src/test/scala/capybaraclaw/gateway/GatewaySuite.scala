@@ -79,6 +79,42 @@ class StubEndpoint(responses: List[ChatResponse]) extends Endpoint:
   * `release`, so a test can send messages while a turn is running; every call
   * records the messages it was given.
   */
+/** Streams the first answer in two steps: a delta as soon as `release`
+  * opens, the final response once `finish` opens. Later calls answer at
+  * once.
+  */
+class SteppedEndpoint(responses: List[ChatResponse]) extends Endpoint:
+  val entered = java.util.concurrent.CountDownLatch(1)
+  val release = java.util.concurrent.CountDownLatch(1)
+  val finish = java.util.concurrent.CountDownLatch(1)
+  val seen = ConcurrentLinkedQueue[List[Message]]()
+  private val calls = AtomicInteger(0)
+
+  def invoke(
+      messages: List[Message],
+      config: LLMConfig
+  ): Result[ChatResponse, LLMError] = Left(LLMError("not used"))
+
+  def stream(messages: List[Message], config: LLMConfig)(using
+      Async.Spawn
+  ): ReadableChannel[Result[StreamEvent, LLMError]] =
+    val i = calls.getAndIncrement()
+    seen.offer(messages)
+    val ch = UnboundedChannel[Result[StreamEvent, LLMError]]()
+    if i == 0 then
+      entered.countDown()
+      val _ = Future:
+        val _ =
+          release.await(FakePort.defaultReplyTimeoutMs, TimeUnit.MILLISECONDS)
+        ch.sendImmediately(Right(StreamEvent.Delta("thinking")))
+        val _ =
+          finish.await(FakePort.defaultReplyTimeoutMs, TimeUnit.MILLISECONDS)
+        ch.sendImmediately(Right(StreamEvent.Done(responses(0))))
+    else if i < responses.length then
+      ch.sendImmediately(Right(StreamEvent.Done(responses(i))))
+    else ch.sendImmediately(Left(LLMError("No more stub responses")))
+    ch.asReadable
+
 class GatedEndpoint(responses: List[ChatResponse]) extends Endpoint:
   val entered = java.util.concurrent.CountDownLatch(1)
   val release = java.util.concurrent.CountDownLatch(1)
@@ -614,6 +650,50 @@ class GatewaySuite extends munit.FunSuite:
       assert(calls(1).contains("[U_alice] also"), calls(1).toString)
       assert(!calls(1).contains("[U_bob] mine"), calls(1).toString)
       assertEquals(calls(2).lastOption, Some("[U_bob] mine"))
+    }
+
+  test(
+    "a message steered in while the final answer streams gets a turn of its own"
+  ):
+    // The agent loop only reads steers after tool results; one accepted while
+    // the last answer is generated (an approval clicked mid-answer) came back
+    // Unconsumed and was dropped.
+    val cp = FakeContextProvider()
+    val port = FakePort(SlackPort.Id)
+    val endpoint = SteppedEndpoint(
+      List(textResponse("waiting for #4"), textResponse("posted"))
+    )
+    runGateway(
+      List(port),
+      cp,
+      endpointFactory = () => endpoint,
+      created = AtomicInteger(0)
+    ) { _ =>
+      val alice = externalOrigin(SlackPort.Id, "U_alice", "C1/1")
+      port.push(GatewayMessage(alice, "average salary?"))
+      assert(
+        endpoint.entered
+          .await(FakePort.defaultReplyTimeoutMs, TimeUnit.MILLISECONDS)
+      )
+      port.push(GatewayMessage(alice, "I approved #4, retry"))
+      Thread.sleep(300) // in the runner's inbox before the delta arrives
+      endpoint.release.countDown()
+      // The delta makes the runner steer it into the still-running run.
+      val deadline = System.currentTimeMillis + FakePort.defaultReplyTimeoutMs
+      while !cp.log.exists(_._2.text == "[U_alice] I approved #4, retry") &&
+        System.currentTimeMillis < deadline
+      do Thread.sleep(20)
+      endpoint.finish.countDown()
+
+      assertEquals(port.nextReply().text, "waiting for #4")
+      assertEquals(port.nextReply().text, "posted")
+      val calls = endpoint.seen.asScala.toList
+        .map(_.filter(_.role == Role.User).map(_.text))
+      assertEquals(calls.length, 2)
+      assertEquals(calls(1).lastOption, Some("[U_alice] I approved #4, retry"))
+      val recorded =
+        cp.log.map(_._2.text).count(_ == "[U_alice] I approved #4, retry")
+      assertEquals(recorded, 1, "recorded once, when it was steered")
     }
 
   test("an approval reply for an unknown request is rejected"):
