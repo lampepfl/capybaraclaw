@@ -66,6 +66,27 @@ class ReplEnvironmentSuite extends munit.FunSuite:
       assert(!Files.exists(dir.resolve("claw.json")))
     finally deleteRecursively(dir)
 
+  workDir.test(
+    "capybara's state is read-only and classified even under an allowed root"
+  ): dir =>
+    // requireApart keeps the state out of the workdir at startup; this is the
+    // sandbox's own guard, should a granted root ever cover it.
+    val root = dir.toRealPath()
+    val state = Files.createDirectories(root.resolve("state"))
+    Files.writeString(state.resolve("identities.json"), "{}")
+    val env = ReplEnvironment(root.toString, Nil, stateDir = state)
+    def run(code: String): String =
+      val r = env.repl.execute(s"""requestFileSystem("$root") { $code }""")
+      r.output + r.error.getOrElse("")
+    val read = run(s"""access("$state/identities.json").read()""")
+    assert(read.contains("classified"), read)
+    val write = run(s"""access("$state/identities.json").write("x")""")
+    assert(write.contains("read-only") || write.contains("classified"), write)
+    val classified =
+      run(s"""writeClassified("$state/identities.json", classify("x"))""")
+    assert(classified.contains("read-only"), classified)
+    assertEquals(Files.readString(state.resolve("identities.json")), "{}")
+
   workDir.test("file access is bounded to the working directory"): dir =>
     val outside = Files.createTempDirectory("claw-outside").toRealPath()
     try

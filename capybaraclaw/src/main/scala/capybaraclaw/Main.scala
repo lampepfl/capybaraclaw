@@ -37,7 +37,12 @@ import scala.util.control.NonFatal
   * An optional positional argument sets the working directory (defaults to `.`).
   */
 @main def main(args: String*): Unit =
-  try ClawMain.main(args.toArray)
+  try
+    capybaraclaw.util.ClawHome.publish()
+    capybaraclaw.util.ClawHome
+      .prepare(capybaraclaw.util.ClawHome.dir, System.getProperty("user.name"))
+      .foreach(w => System.err.println(s"[claw] warning: $w"))
+    ClawMain.main(args.toArray)
   catch
     case ClawCaseAppExit(0) =>
       ()
@@ -94,6 +99,8 @@ private object ClawMain extends CaseApp[CliOptions]:
         contextProvider.adoptUnscopedCliSessions(cliScope)
         val (sessionId, workDirFile) =
           bootstrapSession(contextProvider, options, remainingArgs)
+        capybaraclaw.util.ClawHome
+          .requireApart(workDirFile.toPath, capybaraclaw.util.ClawHome.dir)
         val workDir = workDirFile.getPath
         val cliUser = CliPort.defaultUser
         val identities = IdentitiesFile(
@@ -280,12 +287,13 @@ private def printStartupInfo(
   val clawJsonExists = File(workDir, "claw.json").exists()
   val clawMdExists = File(workDir, "CLAW.md").exists()
   val logFile =
-    File(System.getProperty("user.home"), ".claw/logs/capybara.log").getPath
+    capybaraclaw.util.ClawHome.dir.resolve("logs/capybara.log").toString
   println("Capybara Claw Gateway")
   println(s"  claw.json: ${if clawJsonExists then "found" else "defaults"}")
   println(s"  CLAW.md  : ${if clawMdExists then "found" else "not found"}")
   pluginsBannerLines(workDir).zipWithIndex.foreach: (line, i) =>
     println(s"  ${if i == 0 then "plugins  :" else "          "} $line")
+  println(s"  state    : ${capybaraclaw.util.ClawHome.dir}")
   println(s"  logs     : $logFile")
   println(s"  slack    : ${
       if enableSlack then "enabled"
