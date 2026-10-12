@@ -39,6 +39,20 @@ class CliTransitionsSuite extends FunSuite:
     turnCount = 1
   )
 
+  /** Private results */
+
+  test("PrivateResult: the whole text is shown, during a turn or not"):
+    val text = "line one\n" + "x" * 500
+    for state <- List(idle, midTurn) do
+      val r = transition(state, PrivateResult("acme.vault: hr", text), ctx)
+      assertEquals(r.state, state)
+      assert(
+        r.effects.contains(
+          Render(Role.Private, s"(acme.vault: hr)\n$text")
+        ),
+        r.effects
+      )
+
   /** Permission requests */
 
   test(

@@ -113,10 +113,24 @@ class RejectingPort(override val id: PortId) extends FakePort(id):
 class FakePort(
     override val id: PortId,
     conversationOf: Origin => Conversation = _ => Conversation.Group("C-fake"),
-    override val supportsApprovals: Boolean = false
+    override val supportsApprovals: Boolean = false,
+    override val supportsPrivateOutput: Boolean = false
 ) extends Port:
   private val inCh = UnboundedChannel[Inbound]()
   val approvalRequests = LinkedBlockingQueue[ApprovalRequest]()
+
+  /** `(user, source, text)` of each message shown with [[showPrivately]]. */
+  val privateMessages = LinkedBlockingQueue[(UserId, String, String)]()
+
+  override def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      source: String,
+      text: String
+  ): Unit =
+    if !supportsPrivateOutput then
+      super.showPrivately(sessionId, origin, source, text)
+    privateMessages.put((origin.user, source, text))
   val resolutions = LinkedBlockingQueue[ApprovalResolution]()
 
   /** `(requestId, stillPending)` of each answer the gateway refused. */

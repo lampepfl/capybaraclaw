@@ -20,6 +20,7 @@ object CliTransitions:
     case AssistantTextComplete(text: String)
     case ErrorText(text: String)
     case ToolCall(toolName: String, args: String)
+    case PrivateResult(source: String, text: String)
     case ApprovalRequested(request: ApprovalRequest)
     case ApprovalChosen(request: ApprovalRequest, decision: ApprovalDecision)
     case ApprovalPostponed(request: ApprovalRequest)
@@ -56,7 +57,7 @@ object CliTransitions:
       )
 
   enum Role:
-    case User, Assistant, Error, Tool, Permission
+    case User, Assistant, Error, Tool, Permission, Private
 
   /** What the input reader does next, between turns. */
   enum InputRequest:
@@ -144,6 +145,17 @@ object CliTransitions:
             )
           )
         else TransitionResult(state, Nil)
+
+      // Shown in full whether or not a turn is running: the broker has
+      // already told the agent it was shown.
+      case PrivateResult(source, text) =>
+        TransitionResult(
+          state,
+          List(
+            RenderAssistantComplete,
+            Render(Role.Private, s"($source)\n$text")
+          )
+        )
 
       case ApprovalRequested(request) =>
         if !state.running then TransitionResult(state, Nil)

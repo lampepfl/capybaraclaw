@@ -239,6 +239,27 @@ class SlackPort(bot: SlackApi) extends Port:
       )
     )
 
+  override def supportsPrivateOutput: Boolean = true
+
+  /** An ephemeral message: only `origin.user` sees it, in the conversation's
+    * thread, and it is not stored in the channel's history. The text goes in
+    * a code block, escaped, so data cannot become links, mentions or a fake
+    * header.
+    */
+  override def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      source: String,
+      text: String
+  ): Unit =
+    val (channelId, threadTs) = decodeHandle(getSlackHandle(origin))
+    bot.postEphemeral(
+      channelId,
+      threadTs,
+      origin.user,
+      SlackPort.privateMessage(source, text)
+    )
+
   @tailrec
   private def clickLoop()(using Async): Unit =
     bot.approvalClicks.read() match
@@ -458,6 +479,14 @@ class SlackPort(bot: SlackApi) extends Port:
 end SlackPort
 
 object SlackPort:
+  /** `text` in a Slack code block: `&`, `<` and `>` escaped, and every
+    * backtick followed by a zero-width space so no run of them closes the
+    * block.
+    */
+  private[slack] def privateMessage(source: String, text: String): String =
+    val body = SlackClient.escape(text).replace("`", "`\u200b")
+    s":lock: *Only visible to you* (${SlackClient.escape(source)})\n```\n$body\n```"
+
   val Id: PortId = PortId("slack")
 
   private enum StreamState:

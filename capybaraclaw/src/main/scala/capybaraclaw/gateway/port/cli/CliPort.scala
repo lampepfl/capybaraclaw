@@ -148,6 +148,22 @@ class CliPort(
   ): Unit =
     offerEvent(ApprovalRequested(request))
 
+  // The terminal is the operator's alone.
+  override def supportsPrivateOutput: Boolean = true
+
+  override def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      source: String,
+      text: String
+  ): Unit =
+    // The broker has already dropped control characters; this port prints
+    // to a terminal, so it drops them again rather than rely on that.
+    val literal =
+      text.filter(c => c == '\n' || c == '\t' || !Character.isISOControl(c))
+    if !offerEvent(PrivateResult(source, literal)) then
+      throw IllegalStateException("the terminal is closed")
+
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)
 
@@ -463,6 +479,8 @@ class CliPort(
         )
       case Role.Permission =>
         ("⚠ permission", permissionStyle)
+      case Role.Private =>
+        ("🔒 private", permissionStyle)
 
     val lines = prepareEntryLines(text)
     val builder = AttributedStringBuilder()

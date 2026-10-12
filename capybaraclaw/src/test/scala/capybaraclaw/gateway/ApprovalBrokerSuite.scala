@@ -574,3 +574,160 @@ class ApprovalBrokerSuite extends munit.FunSuite:
       ),
       message
     )
+
+  // --- reveal ---
+
+  /** alice may read the vault's hr dataset, bob hr and board. */
+  private val vaultJson =
+    """{
+      "roles": {
+        "hr": {"may": [{"permission": "plugin:acme.vault/read", "items": ["hr"]}]},
+        "ceo": {"may": [{"permission": "plugin:acme.vault/read", "items": ["hr", "board"]}]}
+      },
+      "people": {
+        "alice": {"ids": ["slack:U_alice"], "roles": ["hr"]},
+        "bob": {"ids": ["slack:U_bob"], "roles": ["ceo"]}
+      }
+    }"""
+
+  private def revealRequest(text: String, labels: String*): String =
+    ujson.write(
+      ujson.Obj(
+        "kind" -> "reveal",
+        "plugin" -> "acme.vault",
+        "permission" -> "read",
+        "labels" -> ujson.Arr(labels.map(ujson.Str(_))*),
+        "text" -> text
+      )
+    )
+
+  private def vaultBroker(
+      who: Origin = origin,
+      privateOutput: Boolean = true
+  ): (ApprovalBroker, FakePort) =
+    val broker = ApprovalBroker(() => identities(vaultJson))
+    val port = FakePort(
+      SlackPort.Id,
+      supportsApprovals = true,
+      supportsPrivateOutput = privateOutput
+    )
+    broker.beginTurn(sessionId, port, who)
+    (broker, port)
+
+  test("a reveal is shown privately to a sender cleared for its labels"):
+    val (broker, port) = vaultBroker()
+    val (allowed, _) =
+      answer(broker.oracle(sessionId)(revealRequest("total €1M", "hr")))
+    assert(allowed)
+    val (user, source, text) = port.privateMessages.poll()
+    assertEquals(user, UserId("U_alice"))
+    assertEquals(text, "total €1M")
+    assertEquals(source, "acme.vault: hr")
+    assert(port.approvalRequests.isEmpty, "nothing is asked")
+
+  test("a reveal needs every label: a value mixing hr and board is refused"):
+    val (broker, port) = vaultBroker()
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr", "board")))
+    assert(!allowed)
+    assert(
+      message.exists(_.contains("computed from board data")),
+      message
+    )
+    assert(port.privateMessages.isEmpty)
+
+  test("someone cleared for both labels sees the mixed value"):
+    val (broker, port) = vaultBroker(bobOrigin)
+    assert(
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr", "board")))._1
+    )
+    assertEquals(port.privateMessages.poll()._1, UserId("U_bob"))
+
+  test("a reveal with no labels is refused: something must need clearance"):
+    val (broker, port) = vaultBroker()
+    assert(!answer(broker.oracle(sessionId)(revealRequest("x")))._1)
+    assert(port.privateMessages.isEmpty)
+
+  test("the permission checked is the one the request names"):
+    val (broker, port) = vaultBroker()
+    val other = ujson.write(
+      ujson.Obj(
+        "kind" -> "reveal",
+        "plugin" -> "acme.vault",
+        "permission" -> "read payroll",
+        "labels" -> ujson.Arr("hr"),
+        "text" -> "x"
+      )
+    )
+    val (allowed, message) = answer(broker.oracle(sessionId)(other))
+    assert(!allowed, "alice's role allows read, not read payroll")
+    assert(message.exists(_.contains("computed from hr data")), message)
+    assert(port.privateMessages.isEmpty)
+
+  test(
+    "the answer does not depend on the text: a long one is cut, not refused"
+  ):
+    val (broker, port) = vaultBroker()
+    val short = broker.oracle(sessionId)(revealRequest("x", "hr"))
+    val long = broker.oracle(sessionId)(revealRequest("😀" * 5000, "hr"))
+    assertEquals(long, short)
+    port.privateMessages.poll()
+    val shown = port.privateMessages.poll()._3
+    assert(shown.endsWith("\n… (truncated)"), shown.takeRight(30))
+    val kept = shown.stripSuffix("\n… (truncated)")
+    assertEquals(kept.codePointCount(0, kept.length), 3800)
+    assert(kept.codePoints.allMatch(_ == 0x1f600), "no emoji is split")
+
+  test("control and invisible characters are removed, line breaks kept"):
+    val (broker, port) = vaultBroker()
+    assert(
+      answer(
+        broker.oracle(sessionId)(
+          revealRequest("a\u001b[31mb\u202e\nc\td", "hr")
+        )
+      )._1
+    )
+    assertEquals(port.privateMessages.poll()._3, "a[31mb\nc\td")
+
+  test("a port that fails to show the result turns into a denial"):
+    val broker = ApprovalBroker(() => identities(vaultJson))
+    val port = new FakePort(
+      SlackPort.Id,
+      supportsApprovals = true,
+      supportsPrivateOutput = true
+    ):
+      override def showPrivately(
+          sessionId: SessionId,
+          origin: Origin,
+          source: String,
+          text: String
+      ): Unit =
+        throw RuntimeException("not_in_channel")
+    broker.beginTurn(sessionId, port, origin)
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr")))
+    assert(!allowed)
+    assert(message.exists(_.contains("could not show the result")), message)
+
+  test("a reveal is refused on a port that cannot show private output"):
+    val (broker, port) = vaultBroker(privateOutput = false)
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr")))
+    assert(!allowed)
+    assert(
+      message.exists(_.contains("cannot show it to the user alone")),
+      message
+    )
+
+  test("a reveal outside a turn is refused"):
+    val (broker, port) = vaultBroker()
+    broker.endTurn(sessionId)
+    assert(!answer(broker.oracle(sessionId)(revealRequest("x", "hr")))._1)
+    assert(port.privateMessages.isEmpty)
+
+  test("a malformed reveal is refused"):
+    val (broker, port) = vaultBroker()
+    val bad =
+      ujson.write(ujson.Obj("kind" -> "reveal", "plugin" -> "acme.vault"))
+    assert(!answer(broker.oracle(sessionId)(bad))._1)
+    assert(port.privateMessages.isEmpty)

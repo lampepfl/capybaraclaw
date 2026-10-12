@@ -63,6 +63,28 @@ trait Port extends AutoCloseable:
       request: ApprovalRequest
   ): Unit = ()
 
+  /** Whether this port can show [[showPrivately]] messages. Without it,
+    * plugins' private results are refused.
+    */
+  def supportsPrivateOutput: Boolean = false
+
+  /** Show `text` to `origin.user` only, without it going through the agent:
+    * a plugin's result that the agent must not see (see
+    * [[capybaraclaw.gateway.ApprovalBroker]]). `source` names the plugin and
+    * the labels, for the header. The text is data, not markup: render it
+    * literally. Must not be visible to anyone else in the conversation.
+    * Throws if it cannot be shown.
+    */
+  def showPrivately(
+      sessionId: SessionId,
+      origin: Origin,
+      source: String,
+      text: String
+  ): Unit =
+    throw UnsupportedOperationException(
+      s"port '$id' cannot show private output"
+    )
+
   /** The gateway acted on an `ApprovalReply` from this port, sent by `by`:
     * the port can now close the request's prompt with the outcome.
     */

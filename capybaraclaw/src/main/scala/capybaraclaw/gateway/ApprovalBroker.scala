@@ -130,6 +130,70 @@ final class ApprovalBroker(identities: () => Identities):
             )
 
   private def decide(sessionId: SessionId, requestJson: String): String =
+    parseReveal(requestJson) match
+      case Some(Left(rejection)) => deny(rejection)
+      case Some(Right(reveal))   => decideReveal(sessionId, reveal)
+      case None                  => decidePermission(sessionId, requestJson)
+
+  /** A plugin's `reveal`: shown privately to the turn's sender, never to the
+    * agent, and only if their roles allow the permission the request names
+    * (e.g. `plugin:acme.vault/read`) for every label the value was computed
+    * from. Nothing is asked: a label the roles allow is one the sender may
+    * see, whether or not this session read it.
+    *
+    * What the agent gets back depends on the labels, the roles and the port,
+    * never on the text: a long text is cut after the decision, not refused.
+    */
+  private def decideReveal(sessionId: SessionId, reveal: Reveal): String =
+    state.get().turns.get(sessionId) match
+      case None =>
+        deny(
+          "Denied showing a private result: only during a turn, to the person whose turn it is."
+        )
+      case Some(turn) =>
+        val ids = identities()
+        val person = ids.person(turn.origin.port, turn.origin.user)
+        val blocked = reveal.labels.toList.sorted.filter: label =>
+          ids
+            .disallowed(
+              person,
+              Permission.Plugin(reveal.plugin, reveal.permission, Set(label))
+            )
+            .isDefined
+        if blocked.nonEmpty then
+          deny(
+            s"Denied showing the result to ${person.id}: it was computed from ${blocked.mkString(", ")} data, which their roles do not allow. " +
+              "Do not retry; tell them it is not available to them."
+          )
+        else if !turn.port.supportsPrivateOutput then
+          deny(
+            "Denied showing a private result: this channel cannot show it to the user alone."
+          )
+        else
+          val source =
+            s"${reveal.plugin}: ${reveal.labels.toList.sorted.mkString(", ")}"
+          try
+            turn.port.showPrivately(
+              sessionId,
+              turn.origin,
+              source,
+              truncated(printable(reveal.text), MaxRevealLength)
+            )
+            allow
+          catch
+            case NonFatal(e) =>
+              logger.warn(
+                s"could not show a private result on port '${turn.port.id}'",
+                e
+              )
+              deny(
+                "Capybara could not show the result to the user. Tell them, and try again later."
+              )
+
+  private def decidePermission(
+      sessionId: SessionId,
+      requestJson: String
+  ): String =
     val outcome = parseRequest(requestJson) match
       case Left(rejection)             => Outcome.Rejected(rejection)
       case Right((permission, reason)) =>
@@ -258,6 +322,61 @@ object ApprovalBroker:
     ujson.write(ujson.Obj("allow" -> false, "message" -> message))
 
   private val unsupported = "Access denied: unsupported permission request."
+
+  /** A plugin's request to show a value to the turn's sender alone. */
+  private final case class Reveal(
+      plugin: String,
+      permission: String,
+      labels: Set[String],
+      text: String
+  )
+
+  /** Code points shown at most; the rest is cut. */
+  private val MaxRevealLength = 3800
+
+  /** `{"kind": "reveal", "plugin", "permission", "labels", "text"}`; `None`
+    * for any other kind of request.
+    *
+    * Only plugin code sends these: tacit gives agent code no way to reach the
+    * oracle, and plugins reach it from inside `tacit.library` (there is no
+    * public API for it yet). Plugins are trusted with what they claim: the
+    * plugin id and the labels are taken as given, as for `kind: "plugin"`.
+    * At least one label is required, so a value always needs someone's
+    * clearance to be shown.
+    */
+  private def parseReveal(json: String): Option[Either[String, Reveal]] =
+    def name(v: Option[ujson.Value]) =
+      v.flatMap(_.strOpt).filter(n => !n.isBlank && !hasNonPrintable(n))
+    Try(ujson.read(json).obj).toOption
+      .filter(_.get("kind").flatMap(_.strOpt).contains("reveal"))
+      .map: obj =>
+        val labels = obj
+          .get("labels")
+          .flatMap(v => Try(v.arr.map(_.str).toSet).toOption)
+          .filter(ls =>
+            ls.nonEmpty && ls.forall(l => !l.isBlank && !hasNonPrintable(l))
+          )
+        val text = obj.get("text").flatMap(_.strOpt)
+        (
+          name(obj.get("plugin")),
+          name(obj.get("permission")),
+          labels,
+          text
+        ) match
+          case (Some(p), Some(perm), Some(ls), Some(t)) =>
+            Right(Reveal(p, perm, ls, t))
+          case _ => Left(unsupported)
+
+  /** At most `max` code points, never splitting a surrogate pair. */
+  private def truncated(text: String, max: Int): String =
+    if text.codePointCount(0, text.length) <= max then text
+    else text.substring(0, text.offsetByCodePoints(0, max)) + "\n… (truncated)"
+
+  /** Keeps line breaks and tabs, drops other control and invisible
+    * formatting characters.
+    */
+  private def printable(text: String): String =
+    text.filter(c => c == '\n' || c == '\t' || !hasNonPrintable(c.toString))
 
   /** The permission asked for by TACIT's `{"kind": "filesystem", "root",
     * "resolved", "access"?}`, `{"kind": "exec", "items"}`, `{"kind":
