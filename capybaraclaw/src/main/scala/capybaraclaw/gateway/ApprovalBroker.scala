@@ -136,10 +136,13 @@ final class ApprovalBroker(identities: () => Identities):
       case None                  => decidePermission(sessionId, requestJson)
 
   /** A plugin's `reveal`: shown privately to the turn's sender, never to the
-    * agent, and only if their roles allow the plugin's `read` permission for
-    * every label the value was computed from. Nothing is asked: a label the
-    * roles allow is one the sender may see, whether or not this session read
-    * it.
+    * agent, and only if their roles allow the permission the request names
+    * (e.g. `plugin:acme.vault/read`) for every label the value was computed
+    * from. Nothing is asked: a label the roles allow is one the sender may
+    * see, whether or not this session read it.
+    *
+    * What the agent gets back depends on the labels, the roles and the port,
+    * never on the text: a long text is cut after the decision, not refused.
     */
   private def decideReveal(sessionId: SessionId, reveal: Reveal): String =
     state.get().turns.get(sessionId) match
@@ -152,7 +155,10 @@ final class ApprovalBroker(identities: () => Identities):
         val person = ids.person(turn.origin.port, turn.origin.user)
         val blocked = reveal.labels.toList.sorted.filter: label =>
           ids
-            .disallowed(person, Permission.Plugin(reveal.plugin, "read", Set(label)))
+            .disallowed(
+              person,
+              Permission.Plugin(reveal.plugin, reveal.permission, Set(label))
+            )
             .isDefined
         if blocked.nonEmpty then
           deny(
@@ -163,13 +169,13 @@ final class ApprovalBroker(identities: () => Identities):
           deny("Denied showing a private result: this channel cannot show it to the user alone.")
         else
           val source =
-            if reveal.labels.isEmpty then reveal.plugin
-            else s"${reveal.plugin}: ${reveal.labels.toList.sorted.mkString(", ")}"
+            s"${reveal.plugin}: ${reveal.labels.toList.sorted.mkString(", ")}"
           try
             turn.port.showPrivately(
               sessionId,
               turn.origin,
-              s":lock: Only visible to you ($source)\n${printable(reveal.text)}"
+              source,
+              truncated(printable(reveal.text), MaxRevealLength)
             )
             allow
           catch
@@ -310,28 +316,43 @@ object ApprovalBroker:
   /** A plugin's request to show a value to the turn's sender alone. */
   private final case class Reveal(
       plugin: String,
+      permission: String,
       labels: Set[String],
       text: String
   )
 
+  /** Code points shown at most; the rest is cut. */
   private val MaxRevealLength = 3800
 
-  /** `{"kind": "reveal", "plugin", "labels", "text"}`, sent by plugin code
-    * only (agent code cannot reach the oracle directly); `None` for any other
-    * kind of request.
+  /** `{"kind": "reveal", "plugin", "permission", "labels", "text"}`; `None`
+    * for any other kind of request.
+    *
+    * Only plugin code sends these: tacit gives agent code no way to reach the
+    * oracle, and plugins reach it from inside `tacit.library` (there is no
+    * public API for it yet). Plugins are trusted with what they claim: the
+    * plugin id and the labels are taken as given, as for `kind: "plugin"`.
+    * At least one label is required, so a value always needs someone's
+    * clearance to be shown.
     */
   private def parseReveal(json: String): Option[Either[String, Reveal]] =
+    def name(v: Option[ujson.Value]) =
+      v.flatMap(_.strOpt).filter(n => !n.isBlank && !hasNonPrintable(n))
     Try(ujson.read(json).obj).toOption
       .filter(_.get("kind").flatMap(_.strOpt).contains("reveal"))
       .map: obj =>
-        val plugin = obj.get("plugin").flatMap(_.strOpt).filter(p => !p.isBlank && !hasNonPrintable(p))
-        val labels = obj.get("labels").flatMap(v => Try(v.arr.map(_.str).toSet).toOption)
+        val labels = obj
+          .get("labels")
+          .flatMap(v => Try(v.arr.map(_.str).toSet).toOption)
+          .filter(ls => ls.nonEmpty && ls.forall(l => !l.isBlank && !hasNonPrintable(l)))
         val text = obj.get("text").flatMap(_.strOpt)
-        (plugin, labels, text) match
-          case (Some(p), Some(ls), Some(t))
-              if ls.forall(l => !l.isBlank && !hasNonPrintable(l)) && t.length <= MaxRevealLength =>
-            Right(Reveal(p, ls, t))
-          case _ => Left(unsupported)
+        (name(obj.get("plugin")), name(obj.get("permission")), labels, text) match
+          case (Some(p), Some(perm), Some(ls), Some(t)) => Right(Reveal(p, perm, ls, t))
+          case _                                        => Left(unsupported)
+
+  /** At most `max` code points, never splitting a surrogate pair. */
+  private def truncated(text: String, max: Int): String =
+    if text.codePointCount(0, text.length) <= max then text
+    else text.substring(0, text.offsetByCodePoints(0, max)) + "\n… (truncated)"
 
   /** Keeps line breaks and tabs, drops other control and invisible
     * formatting characters.

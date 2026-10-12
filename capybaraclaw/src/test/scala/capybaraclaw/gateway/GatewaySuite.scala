@@ -119,16 +119,18 @@ class FakePort(
   private val inCh = UnboundedChannel[Inbound]()
   val approvalRequests = LinkedBlockingQueue[ApprovalRequest]()
 
-  /** `(user, text)` of each message shown with [[showPrivately]]. */
-  val privateMessages = LinkedBlockingQueue[(UserId, String)]()
+  /** `(user, source, text)` of each message shown with [[showPrivately]]. */
+  val privateMessages = LinkedBlockingQueue[(UserId, String, String)]()
 
   override def showPrivately(
       sessionId: SessionId,
       origin: Origin,
+      source: String,
       text: String
   ): Unit =
-    if !supportsPrivateOutput then super.showPrivately(sessionId, origin, text)
-    privateMessages.put(origin.user -> text)
+    if !supportsPrivateOutput then
+      super.showPrivately(sessionId, origin, source, text)
+    privateMessages.put((origin.user, source, text))
   val resolutions = LinkedBlockingQueue[ApprovalResolution]()
 
   /** `(requestId, stillPending)` of each answer the gateway refused. */

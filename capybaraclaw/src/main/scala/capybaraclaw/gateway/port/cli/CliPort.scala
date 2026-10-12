@@ -154,9 +154,11 @@ class CliPort(
   override def showPrivately(
       sessionId: SessionId,
       origin: Origin,
+      source: String,
       text: String
   ): Unit =
-    offerEvent(ToolCall("private result", text))
+    if !offerEvent(PrivateResult(source, text)) then
+      throw IllegalStateException("the terminal is closed")
 
   override def onTurnFinished(sessionId: SessionId, origin: Origin): Unit =
     offerEvent(TurnFinished)

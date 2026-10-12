@@ -661,6 +661,23 @@ class SlackPortSuite extends munit.FunSuite:
       )
       port.shutdown()
 
+  test("a private result is an ephemeral message in the thread, as escaped literal text"):
+    val bot = FakeSlackApi()
+    val port = SlackPort(bot)
+    port.showPrivately(
+      sessionId,
+      slackOrigin(SessionHandle(SlackPort.Id, "C123/1.1")),
+      "acme.vault: hr",
+      "<https://evil.example|Payroll portal> <@U9> ``` & done"
+    )
+    assertEquals(bot.ephemeralTargets.toList, List(("C123", Some("1.1"))))
+    val (user, text) = bot.ephemerals.head
+    assertEquals(user, "U1")
+    assert(text.startsWith(":lock: *Only visible to you* (acme.vault: hr)\n```\n"), text)
+    assert(text.contains("&lt;https://evil.example|Payroll portal&gt; &lt;@U9&gt;"), text)
+    assert(text.contains("&amp; done"), text)
+    assertEquals(text.split("```", -1).length, 3, "the data cannot close the block")
+
   private def slackOrigin(handle: SessionHandle): Origin =
     Origin(
       port = SlackPort.Id,
@@ -701,6 +718,7 @@ private final class FakeSlackApi(
     ListBuffer.empty
   val closed: ListBuffer[(String, String)] = ListBuffer.empty
   val ephemerals: ListBuffer[(String, String)] = ListBuffer.empty
+  val ephemeralTargets: ListBuffer[(String, Option[String])] = ListBuffer.empty
 
   def click(click: ApprovalClick): Unit = clicks.sendImmediately(click)
   def push(message: Message): Unit = messages.sendImmediately(message)
@@ -773,6 +791,7 @@ private final class FakeSlackApi(
       text: String
   ): Unit =
     ephemerals += ((userId, text))
+    ephemeralTargets += ((channel, threadTs))
 
   def messageChannel: ReadableChannel[Message] = messages.asReadable
   def approvalClicks: ReadableChannel[ApprovalClick] = clicks.asReadable
