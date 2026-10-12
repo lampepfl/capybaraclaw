@@ -11,6 +11,12 @@ class ClawHomeSuite extends munit.FunSuite:
 
   private def resolve(value: Option[String]) = ClawHome.resolve(value, home, cwd)
 
+  private val tmp = FunFixture[Path](
+    setup = _ => Files.createTempDirectory("claw-home").toRealPath(),
+    teardown = dir =>
+      Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
+  )
+
   test("unset or blank means ~/.claw"):
     assertEquals(resolve(None), Paths.get("/home/op/.claw"))
     assertEquals(resolve(Some("  ")), Paths.get("/home/op/.claw"))
@@ -29,12 +35,6 @@ class ClawHomeSuite extends munit.FunSuite:
     intercept[ConfigError](resolve(Some("~")))
     intercept[ConfigError](resolve(Some("~/")))
     intercept[ConfigError](resolve(Some("~bob/claw")))
-
-  private val tmp = FunFixture[Path](
-    setup = _ => Files.createTempDirectory("claw-home").toRealPath(),
-    teardown = dir =>
-      Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
-  )
 
   tmp.test("the state directory may not be inside the workdir or contain it"): dir =>
     val workDir = Files.createDirectories(dir.resolve("work"))
@@ -70,3 +70,12 @@ class ClawHomeSuite extends munit.FunSuite:
       "rwxrwxrwx",
       "its permissions are left alone"
     )
+
+  tmp.test("an existing one others can only read is reported too"): dir =>
+    val home = Files.createDirectory(dir.resolve("claw"))
+    Files.setPosixFilePermissions(home, PosixFilePermissions.fromString("rwxr-xr-x"))
+    val warnings = ClawHome.prepare(home, System.getProperty("user.name"))
+    assertEquals(warnings.size, 1, warnings)
+    assert(warnings.head.contains("readable by other users"), warnings)
+    Files.setPosixFilePermissions(home, PosixFilePermissions.fromString("rwx------"))
+    assertEquals(ClawHome.prepare(home, System.getProperty("user.name")), Nil)

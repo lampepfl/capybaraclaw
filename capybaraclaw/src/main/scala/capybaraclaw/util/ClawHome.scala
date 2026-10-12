@@ -74,8 +74,10 @@ object ClawHome:
       )
 
   /** Creates the state directory owner-only (`rwx------`) if it does not
-    * exist yet; for an existing one, the returned warnings say if others
-    * could write it or someone else owns it. Its permissions are left alone.
+    * exist yet; for an existing one, the returned warnings say if others can
+    * read or write it (a `~/.claw` from before this check is usually
+    * `rwxr-xr-x`, its `state.db` `rw-r--r--`) or someone else owns it. Its
+    * permissions are left alone.
     */
   def prepare(home: Path, user: String): List[String] =
     if !Files.exists(home) then
@@ -92,13 +94,14 @@ object ClawHome:
           val _ = Files.createDirectory(home)
       Nil
     else
-      val shared = Try(Files.getPosixFilePermissions(home).asScala.toSet).toOption
-        .filter(p =>
-          p(PosixFilePermission.GROUP_WRITE) || p(PosixFilePermission.OTHERS_WRITE)
-        )
-        .map(_ =>
-          s"$home is writable by other users; transcripts, roles and memories there are not protected."
-        )
+      import PosixFilePermission.*
+      val perms = Try(Files.getPosixFilePermissions(home).asScala.toSet).toOption
+      val shared = perms.flatMap: p =>
+        if p(GROUP_WRITE) || p(OTHERS_WRITE) then
+          Some(s"$home is writable by other users; transcripts, roles and memories there are not protected.")
+        else if p(GROUP_READ) || p(OTHERS_READ) then
+          Some(s"$home is readable by other users, and so are the transcripts and memories in it; consider chmod 700 $home.")
+        else None
       val foreign = Try(Files.getOwner(home).getName).toOption
         .filter(_ != user)
         .map(owner => s"$home is owned by $owner, not $user.")
