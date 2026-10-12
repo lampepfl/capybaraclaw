@@ -661,7 +661,9 @@ class SlackPortSuite extends munit.FunSuite:
       )
       port.shutdown()
 
-  test("a private result is an ephemeral message in the thread, as escaped literal text"):
+  test(
+    "a private result is an ephemeral message in the thread, as escaped literal text"
+  ):
     val bot = FakeSlackApi()
     val port = SlackPort(bot)
     port.showPrivately(
@@ -673,10 +675,20 @@ class SlackPortSuite extends munit.FunSuite:
     assertEquals(bot.ephemeralTargets.toList, List(("C123", Some("1.1"))))
     val (user, text) = bot.ephemerals.head
     assertEquals(user, "U1")
-    assert(text.startsWith(":lock: *Only visible to you* (acme.vault: hr)\n```\n"), text)
-    assert(text.contains("&lt;https://evil.example|Payroll portal&gt; &lt;@U9&gt;"), text)
+    assert(
+      text.startsWith(":lock: *Only visible to you* (acme.vault: hr)\n```\n"),
+      text
+    )
+    assert(
+      text.contains("&lt;https://evil.example|Payroll portal&gt; &lt;@U9&gt;"),
+      text
+    )
     assert(text.contains("&amp; done"), text)
-    assertEquals(text.split("```", -1).length, 3, "the data cannot close the block")
+    assertEquals(
+      text.split("```", -1).length,
+      3,
+      "the data cannot close the block"
+    )
 
   private def slackOrigin(handle: SessionHandle): Origin =
     Origin(

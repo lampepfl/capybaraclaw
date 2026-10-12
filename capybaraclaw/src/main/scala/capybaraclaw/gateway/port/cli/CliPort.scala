@@ -159,7 +159,8 @@ class CliPort(
   ): Unit =
     // The broker has already dropped control characters; this port prints
     // to a terminal, so it drops them again rather than rely on that.
-    val literal = text.filter(c => c == '\n' || c == '\t' || !Character.isISOControl(c))
+    val literal =
+      text.filter(c => c == '\n' || c == '\t' || !Character.isISOControl(c))
     if !offerEvent(PrivateResult(source, literal)) then
       throw IllegalStateException("the terminal is closed")
 

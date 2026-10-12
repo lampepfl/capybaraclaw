@@ -81,7 +81,9 @@ trait Port extends AutoCloseable:
       source: String,
       text: String
   ): Unit =
-    throw UnsupportedOperationException(s"port '$id' cannot show private output")
+    throw UnsupportedOperationException(
+      s"port '$id' cannot show private output"
+    )
 
   /** The gateway acted on an `ApprovalReply` from this port, sent by `by`:
     * the port can now close the request's prompt with the outcome.

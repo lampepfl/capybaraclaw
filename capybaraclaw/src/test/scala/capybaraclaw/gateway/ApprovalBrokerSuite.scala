@@ -638,7 +638,9 @@ class ApprovalBrokerSuite extends munit.FunSuite:
 
   test("someone cleared for both labels sees the mixed value"):
     val (broker, port) = vaultBroker(bobOrigin)
-    assert(answer(broker.oracle(sessionId)(revealRequest("x", "hr", "board")))._1)
+    assert(
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr", "board")))._1
+    )
     assertEquals(port.privateMessages.poll()._1, UserId("U_bob"))
 
   test("a reveal with no labels is refused: something must need clearance"):
@@ -662,7 +664,9 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     assert(message.exists(_.contains("computed from hr data")), message)
     assert(port.privateMessages.isEmpty)
 
-  test("the answer does not depend on the text: a long one is cut, not refused"):
+  test(
+    "the answer does not depend on the text: a long one is cut, not refused"
+  ):
     val (broker, port) = vaultBroker()
     val short = broker.oracle(sessionId)(revealRequest("x", "hr"))
     val long = broker.oracle(sessionId)(revealRequest("😀" * 5000, "hr"))
@@ -676,16 +680,32 @@ class ApprovalBrokerSuite extends munit.FunSuite:
 
   test("control and invisible characters are removed, line breaks kept"):
     val (broker, port) = vaultBroker()
-    assert(answer(broker.oracle(sessionId)(revealRequest("a\u001b[31mb\u202e\nc\td", "hr")))._1)
+    assert(
+      answer(
+        broker.oracle(sessionId)(
+          revealRequest("a\u001b[31mb\u202e\nc\td", "hr")
+        )
+      )._1
+    )
     assertEquals(port.privateMessages.poll()._3, "a[31mb\nc\td")
 
   test("a port that fails to show the result turns into a denial"):
     val broker = ApprovalBroker(() => identities(vaultJson))
-    val port = new FakePort(SlackPort.Id, supportsApprovals = true, supportsPrivateOutput = true):
-      override def showPrivately(sessionId: SessionId, origin: Origin, source: String, text: String): Unit =
+    val port = new FakePort(
+      SlackPort.Id,
+      supportsApprovals = true,
+      supportsPrivateOutput = true
+    ):
+      override def showPrivately(
+          sessionId: SessionId,
+          origin: Origin,
+          source: String,
+          text: String
+      ): Unit =
         throw RuntimeException("not_in_channel")
     broker.beginTurn(sessionId, port, origin)
-    val (allowed, message) = answer(broker.oracle(sessionId)(revealRequest("x", "hr")))
+    val (allowed, message) =
+      answer(broker.oracle(sessionId)(revealRequest("x", "hr")))
     assert(!allowed)
     assert(message.exists(_.contains("could not show the result")), message)
 
@@ -694,7 +714,10 @@ class ApprovalBrokerSuite extends munit.FunSuite:
     val (allowed, message) =
       answer(broker.oracle(sessionId)(revealRequest("x", "hr")))
     assert(!allowed)
-    assert(message.exists(_.contains("cannot show it to the user alone")), message)
+    assert(
+      message.exists(_.contains("cannot show it to the user alone")),
+      message
+    )
 
   test("a reveal outside a turn is refused"):
     val (broker, port) = vaultBroker()
@@ -704,6 +727,7 @@ class ApprovalBrokerSuite extends munit.FunSuite:
 
   test("a malformed reveal is refused"):
     val (broker, port) = vaultBroker()
-    val bad = ujson.write(ujson.Obj("kind" -> "reveal", "plugin" -> "acme.vault"))
+    val bad =
+      ujson.write(ujson.Obj("kind" -> "reveal", "plugin" -> "acme.vault"))
     assert(!answer(broker.oracle(sessionId)(bad))._1)
     assert(port.privateMessages.isEmpty)

@@ -166,7 +166,9 @@ final class ApprovalBroker(identities: () => Identities):
               "Do not retry; tell them it is not available to them."
           )
         else if !turn.port.supportsPrivateOutput then
-          deny("Denied showing a private result: this channel cannot show it to the user alone.")
+          deny(
+            "Denied showing a private result: this channel cannot show it to the user alone."
+          )
         else
           val source =
             s"${reveal.plugin}: ${reveal.labels.toList.sorted.mkString(", ")}"
@@ -180,10 +182,18 @@ final class ApprovalBroker(identities: () => Identities):
             allow
           catch
             case NonFatal(e) =>
-              logger.warn(s"could not show a private result on port '${turn.port.id}'", e)
-              deny("Capybara could not show the result to the user. Tell them, and try again later.")
+              logger.warn(
+                s"could not show a private result on port '${turn.port.id}'",
+                e
+              )
+              deny(
+                "Capybara could not show the result to the user. Tell them, and try again later."
+              )
 
-  private def decidePermission(sessionId: SessionId, requestJson: String): String =
+  private def decidePermission(
+      sessionId: SessionId,
+      requestJson: String
+  ): String =
     val outcome = parseRequest(requestJson) match
       case Left(rejection)             => Outcome.Rejected(rejection)
       case Right((permission, reason)) =>
@@ -343,11 +353,19 @@ object ApprovalBroker:
         val labels = obj
           .get("labels")
           .flatMap(v => Try(v.arr.map(_.str).toSet).toOption)
-          .filter(ls => ls.nonEmpty && ls.forall(l => !l.isBlank && !hasNonPrintable(l)))
+          .filter(ls =>
+            ls.nonEmpty && ls.forall(l => !l.isBlank && !hasNonPrintable(l))
+          )
         val text = obj.get("text").flatMap(_.strOpt)
-        (name(obj.get("plugin")), name(obj.get("permission")), labels, text) match
-          case (Some(p), Some(perm), Some(ls), Some(t)) => Right(Reveal(p, perm, ls, t))
-          case _                                        => Left(unsupported)
+        (
+          name(obj.get("plugin")),
+          name(obj.get("permission")),
+          labels,
+          text
+        ) match
+          case (Some(p), Some(perm), Some(ls), Some(t)) =>
+            Right(Reveal(p, perm, ls, t))
+          case _ => Left(unsupported)
 
   /** At most `max` code points, never splitting a surrogate pair. */
   private def truncated(text: String, max: Int): String =
