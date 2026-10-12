@@ -1,7 +1,7 @@
 package capybaraclaw.gateway
 
 import capybaraclaw.Throwables
-import capybaraclaw.agent.{ClawAgent, MemoryAccess}
+import capybaraclaw.agent.{ClawAgent, MemoryAccess, ReplEnvironment}
 import capybaraclaw.gateway.port.Port
 import gears.async.{Async, Future}
 import org.slf4j.LoggerFactory
@@ -99,6 +99,11 @@ class Gateway(
                 case reply: ApprovalReply =>
                   handleApprovalReply(port, sessionId, reply)
             catch
+              case e: ReplEnvironment.Refused =>
+                // The operator needs to know: until stuck runs end or capybara
+                // restarts, nobody can start a conversation.
+                logger.error("refused a new conversation: {}", e.getMessage)
+                rejectInbound(port, msg.origin, e.getMessage)
               case e: IllegalArgumentException =>
                 logger.warn(
                   "dropping message with invalid session origin: {}",

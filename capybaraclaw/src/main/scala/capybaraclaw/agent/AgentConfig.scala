@@ -54,6 +54,7 @@ case class AgentConfig(
     model: String = "minimax/minimax-m2.7",
     maxTokens: Int = 16000,
     classifiedPaths: List[String] = Nil,
+    executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs,
     memorySnapshot: MemorySnapshot = MemorySnapshot.empty
 ):
   def toLLMConfig(apiReference: String): LLMConfig =
@@ -65,8 +66,19 @@ case class AgentConfig(
     )
 
 object AgentConfig:
+  /** Wall-clock budget for one `evaluate_scala` call. Without one, a loop in
+    * agent code never returns and its session is stuck for good.
+    */
+  val DefaultExecutionTimeoutMs: Int = 120000
+
   private val KnownKeys =
-    List("provider", "model", "max_tokens", "classified_paths")
+    List(
+      "provider",
+      "model",
+      "max_tokens",
+      "classified_paths",
+      "execution_timeout_ms"
+    )
 
   /** Load `${workDir}/claw.json` if present; otherwise use defaults. An unreadable or malformed
     * file, an unknown key, a wrong-typed field or an unknown provider raises
@@ -116,6 +128,10 @@ object AgentConfig:
         field(obj, path, "classified_paths", "an array of non-empty strings")(
           _.arr.map(nonBlankString).toList
         ).getOrElse(Nil),
+      executionTimeoutMs =
+        field(obj, path, "execution_timeout_ms", "a positive integer")(
+          positiveInt
+        ).getOrElse(DefaultExecutionTimeoutMs),
       memorySnapshot = memorySnapshot
     )
 

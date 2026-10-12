@@ -12,13 +12,28 @@ import scala.util.Try
 final class ReplEnvironment(
     workDir: String,
     classifiedPaths: List[String],
-    permissionOracle: Option[String => String] = None
+    permissionOracle: Option[String => String] = None,
+    executionTimeoutMs: Int = AgentConfig.DefaultExecutionTimeoutMs
 ):
+  // Every stuck run keeps a whole compiler in memory, and capybaraclaw has no
+  // session cap, so past tacit's limit a new conversation is refused rather
+  // than risking the gateway running out of memory. The gateway shows the
+  // message to the user, and the next message tries again.
+  ManagedRepl.abandonedLimitReached.foreach: _ =>
+    throw ReplEnvironment.Refused(
+      s"Capybara can't start a new conversation right now: ${ManagedRepl.abandonedExecutions} earlier code runs " +
+        "timed out and are still running in the background. Try again later, or ask the operator to restart capybara."
+    )
+
   val loadedPlugins: List[LoadedPlugin] = Plugins.load(workDir)
 
   private val context: TacitContext = TacitContext(
     TacitConfig(
       libraryJarPath = ReplEnvironment.resolveLibraryJarPath(),
+      executionTimeoutMs = Some(executionTimeoutMs.toLong),
+      // Tacit logs to stderr, which is the operator's terminal here;
+      // capybaraclaw logs what matters itself.
+      quiet = true,
       libraryConfig = Json.obj(
         "readOnlyPaths" -> ReplEnvironment.readOnlyPaths(workDir).asJson,
         // Relative paths in agent code mean the workdir, wherever the
@@ -48,6 +63,9 @@ final class ReplEnvironment(
   val repl: ReplSession = ReplSession.create(using context)
 
 object ReplEnvironment:
+  /** A new conversation's REPL was refused; the message is for the user. */
+  final class Refused(message: String) extends RuntimeException(message)
+
   /** Workdir files that steer the gateway itself: plugin jars run as trusted
     * code in every new session, and `claw.json` and `CLAW.md` configure it.
     * The agent may read them but never change them; tacit resolves the paths

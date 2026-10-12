@@ -1,5 +1,9 @@
 package capybaraclaw.agent
 
+import capybaraclaw.agent.tools.EvalScalaTool
+import capybaraclaw.gateway.SessionId
+import tacit.executor.ManagedRepl
+
 import java.nio.file.{Files, Path}
 
 class ReplEnvironmentSuite extends munit.FunSuite:
@@ -158,6 +162,54 @@ class ReplEnvironmentSuite extends munit.FunSuite:
       "x",
       result.output + result.error.getOrElse("")
     )
+
+  workDir.test("a runaway loop is stopped at the timeout"): dir =>
+    val env = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 1000)
+    val sessionId = SessionId.random()
+    val stopped =
+      EvalScalaTool.evaluate(env.repl, sessionId, "while true do ()")
+    assert(stopped.contains("timed out"), stopped)
+    assert(!stopped.contains(EvalScalaTool.BlockedGuidance), stopped)
+    val after = EvalScalaTool.evaluate(env.repl, sessionId, "1 + 1")
+    assert(after.contains("2"), after)
+
+  workDir.test(
+    "a run stuck outside REPL code blocks only its conversation, and the agent is told why"
+  ): dir =>
+    // An oracle that never answers until released keeps the run outside REPL
+    // code, where the timeout cannot stop it.
+    val gate = java.util.concurrent.CountDownLatch(1)
+    val blocking: String => String = _ =>
+      var waiting = true
+      while waiting do
+        try
+          gate.await()
+          waiting = false
+        catch case _: InterruptedException => ()
+      """{"allow":false}"""
+    val stuck = ReplEnvironment(dir.toString, Nil, Some(blocking), 500)
+    val other = ReplEnvironment(dir.toString, Nil, executionTimeoutMs = 500)
+    val sessionId = SessionId.random()
+    try
+      val timedOut = EvalScalaTool.evaluate(
+        stuck.repl,
+        sessionId,
+        """requestFileSystem("/") { () }"""
+      )
+      assert(timedOut.contains("keeps running"), timedOut)
+      assert(timedOut.contains(EvalScalaTool.BlockedGuidance), timedOut)
+
+      val result = EvalScalaTool.evaluate(other.repl, sessionId, "1 + 1")
+      assert(result.contains("2"), result)
+      // An ordinary failure elsewhere gets no stuck-REPL guidance.
+      val failed = EvalScalaTool.evaluate(other.repl, sessionId, "1 +")
+      assert(failed.contains("Execution failed"), failed)
+      assert(!failed.contains(EvalScalaTool.BlockedGuidance), failed)
+
+      val refused = EvalScalaTool.evaluate(stuck.repl, sessionId, "1 + 1")
+      assert(refused.contains(ManagedRepl.StillRunningMessage), refused)
+      assert(refused.contains(EvalScalaTool.BlockedGuidance), refused)
+    finally gate.countDown()
 
   private def existsCode(path: Path): String =
     s"""requestFileSystem("$path") { access("$path").exists }"""
