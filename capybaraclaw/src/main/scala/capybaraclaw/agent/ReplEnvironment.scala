@@ -39,7 +39,9 @@ final class ReplEnvironment(
       // capybaraclaw logs what matters itself.
       quiet = true,
       libraryConfig = Json.obj(
-        "readOnlyPaths" -> (ReplEnvironment.readOnlyPaths(workDir) :+ stateDir.toString).asJson,
+        "readOnlyPaths" -> (ReplEnvironment.readOnlyPaths(
+          workDir
+        ) :+ stateDir.toString).asJson,
         // Relative paths in agent code mean the workdir, wherever the
         // gateway was started from.
         "workingDir" -> java.io.File(workDir).getCanonicalPath.asJson,
@@ -47,8 +49,7 @@ final class ReplEnvironment(
         "commandPermissions" -> List.empty[String].asJson,
         "networkPermissions" -> List.empty[String].asJson,
         "classifiedPaths" -> (ReplEnvironment
-          .classifiedPatterns(workDir, classifiedPaths) :+ s"$stateDir/")
-          .asJson
+          .classifiedPatterns(workDir, classifiedPaths) :+ s"$stateDir/").asJson
       )
     ),
     recorder = None,

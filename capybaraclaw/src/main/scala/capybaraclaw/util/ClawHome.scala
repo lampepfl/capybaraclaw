@@ -45,7 +45,7 @@ object ClawHome:
     */
   def resolve(configured: Option[String], home: String, cwd: Path): Path =
     configured.map(_.trim).filter(_.nonEmpty) match
-      case None => Paths.get(home, ".claw")
+      case None                             => Paths.get(home, ".claw")
       case Some(p) if p == "~" || p == "~/" =>
         throw ConfigError(
           s"$EnvVar must name a directory of its own, not your home directory, e.g. ~/.claw-demo."
@@ -95,12 +95,18 @@ object ClawHome:
       Nil
     else
       import PosixFilePermission.*
-      val perms = Try(Files.getPosixFilePermissions(home).asScala.toSet).toOption
+      val perms = Try(
+        Files.getPosixFilePermissions(home).asScala.toSet
+      ).toOption
       val shared = perms.flatMap: p =>
         if p(GROUP_WRITE) || p(OTHERS_WRITE) then
-          Some(s"$home is writable by other users; transcripts, roles and memories there are not protected.")
+          Some(
+            s"$home is writable by other users; transcripts, roles and memories there are not protected."
+          )
         else if p(GROUP_READ) || p(OTHERS_READ) then
-          Some(s"$home is readable by other users, and so are the transcripts and memories in it; consider chmod 700 $home.")
+          Some(
+            s"$home is readable by other users, and so are the transcripts and memories in it; consider chmod 700 $home."
+          )
         else None
       val foreign = Try(Files.getOwner(home).getName).toOption
         .filter(_ != user)
